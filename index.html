@@ -444,6 +444,22 @@ button { cursor: pointer; }
 .kick { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .todaycard { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
 .tcbody { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
+.weekcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 10px; }
+.weekcard .wkhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.weekcard .wkhead h3 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .01em; }
+.weekcard .wkhead span { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.wkdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
+.wkd { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--ink-3); }
+.wkd i { width: 100%; height: 22px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--line); display: block; }
+.wkd.done i { background: var(--c); border-color: var(--c); }
+.wkd.done2 i { background: linear-gradient(135deg, var(--c) 50%, var(--c2) 50%); border-color: var(--c); }
+.wkd.today { color: var(--ink); font-weight: 700; }
+.wkd.today i { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink-2); }
+.wkd.fut i { opacity: .45; }
+.wkd.miss i { border: 1.5px dashed var(--run); background: transparent; }
+.wktot { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.wktot span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); background: color-mix(in srgb, var(--c) 14%, var(--surface)); font-variant-numeric: tabular-nums; }
+.wkfoot { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
 .todaycard h2 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 28px; line-height: 1.05; }
 .todaycard .sub { font-size: 14px; color: var(--ink-2); }
 .sheet { border-radius: 22px 22px 0 0; gap: 16px; }
@@ -814,6 +830,44 @@ img { max-width: 100%; }
       '</div></header>';
   }
 
+  /* ---------- Resumen de la semana (lunes a domingo) ---------- */
+  function weekCard() {
+    var now = new Date(), todayKey = ymd(now), mon = mondayOf(now);
+    var days = '', n = 0, planned = 0, planDone = 0;
+    var sum = {};
+    SPORTS.forEach(function (s) { sum[s.id] = { days: 0, km: 0, min: 0 }; });
+    for (var i = 0; i < 7; i++) {
+      var d = addDays(mon, i), k = ymd(d);
+      var acts = state.logs[k] || {}, plan = state.plans[k] || [];
+      var done = SPORTS.filter(function (x) { return acts[x.id]; });
+      done.forEach(function (x) {
+        var a = acts[x.id], t = sum[x.id];
+        t.days++; if (a.km) t.km += a.km; if (a.min) t.min += a.min;
+      });
+      if (done.length) n++;
+      plan.forEach(function (p) { planned++; if (acts[p.sport]) planDone++; });
+      var missed = !done.length && plan.length && k < todayKey;
+      var cls = 'wkd' + (done.length === 1 ? ' done s-' + done[0].id : done.length > 1 ? ' done2 s-' + done[0].id : '') + (k === todayKey ? ' today' : '') + (k > todayKey ? ' fut' : '') + (missed ? ' miss' : '');
+      var st = done.length > 1 ? ' style="--c2: var(--' + done[1].id + ')"' : '';
+      days += '<span class="' + cls + '"' + st + '><i></i>' + WD_HEAD[i] + '</span>';
+    }
+    var chips = SPORTS.map(function (s) {
+      var t = sum[s.id];
+      if (!t.days) return '';
+      var txt;
+      if (isKm(s.id)) txt = fmt(t.km) + ' km';
+      else txt = t.days + (t.days === 1 ? ' día' : ' días') + (t.min ? ' · ' + t.min + ' min' : '');
+      return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + ' · ' + txt + '</span>';
+    }).join('');
+    var foot = planned ? '<div class="wkfoot">Plan de la semana: ' + planDone + ' de ' + planned + ' cumplidos</div>' : '';
+    var prev = 0;
+    for (var j = 1; j <= 7; j++) { if (hasAct(ymd(addDays(mon, -j)))) prev++; }
+    var cmp = '<div class="wkfoot">Semana pasada: ' + prev + (prev === 1 ? ' día' : ' días') + ' con entreno</div>';
+    return '<section class="weekcard"><div class="wkhead"><h3>Esta semana</h3><span>' + n + (n === 1 ? ' día' : ' días') + ' con entreno</span></div>' +
+      '<div class="wkdays">' + days + '</div>' +
+      (chips ? '<div class="wktot">' + chips + '</div>' : '<div class="wkfoot">Todavía no has apuntado nada esta semana.</div>') + foot + cmp + '</section>';
+  }
+
   function todayCard() {
     var now = new Date(), k = ymd(now);
     var acts = state.logs[k] || {};
@@ -928,7 +982,7 @@ img { max-width: 100%; }
       ? '<p class="empty-note">Todavía no has apuntado ningún entreno. Toca un día del calendario para empezar.</p>'
       : '';
 
-    return todayCard() + '<div class="nav">' +
+    return todayCard() + weekCard() + '<div class="nav">' +
         '<button class="iconbtn" data-act="prev-month" aria-label="Mes anterior">' + CHEV_L + '</button>' +
         '<div class="title"><h2>' + MONTHS[mo] + ' ' + y + '</h2></div>' +
         '<button class="btn small" data-act="this-month"' + (isCurrent ? ' disabled' : '') + '>Hoy</button>' +
