@@ -83,9 +83,7 @@ button { cursor: pointer; }
   line-height: 1;
 }
 .status { font-size: 12px; color: var(--ink-3); }
-.tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+\1grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -504,6 +502,28 @@ img { max-width: 100%; }
 .authcard .intro { margin: 0; }
 .autherr { margin: 0; min-height: 1.4em; font-size: 14px; color: var(--run); }
 .autherr.ok { color: var(--bike); }
+
+/* Año y guardado automático */
+.tile.neutral { --c: var(--accent); }
+.tile.neutral .big { font-size: 34px; }
+.ymsg { margin: 12px 2px 0; }
+.ygrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+@media (min-width: 640px) { .ygrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.mblock { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-width: 0; }
+.mhead { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.mname { border: 0; background: transparent; padding: 0; text-align: left; color: var(--ink); font-family: var(--font-display); font-weight: 700; font-size: 21px; line-height: 1.1; text-transform: capitalize; }
+.mcount { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mcount .miss { color: var(--run); font-weight: 700; }
+.mdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.yd { aspect-ratio: 1; min-width: 0; padding: 0; border-radius: 5px; border: 1px solid transparent; background: var(--surface-2); font-size: 0; }
+.yd.miss { background: transparent; border: 1.5px dashed var(--run); }
+.yd.fut { background: transparent; border: 1px solid var(--line); }
+.yd.futplan { border: 1.5px dashed var(--accent); }
+.yd.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swp.miss { border-color: var(--run); }
+.swp.rest { border: 0; background: var(--surface-2); border: 1px solid var(--line); }
+.savestate { margin-left: auto; align-self: center; font-size: 13px; color: var(--ink-2); text-align: right; }
+.tab { font-size: 14px; }
 </style>
 </head>
 <body>
@@ -605,6 +625,7 @@ img { max-width: 100%; }
     tab: 'log',
     month: new Date(now0.getFullYear(), now0.getMonth(), 1),
     week: mondayOf(now0),
+    year: now0.getFullYear(),
     logs: {},
     plans: {},
     routines: null,
@@ -777,8 +798,9 @@ img { max-width: 100%; }
       '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
       '<div class="tabs" role="tablist" aria-label="Secciones">' +
         '<button class="tab" role="tab" id="tab-log" aria-selected="' + (state.tab === 'log') + '" aria-controls="panel" data-act="tab" data-tab="log">Registro</button>' +
-        '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Planificador</button>' +
+        '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Plan</button>' +
         '<button class="tab" role="tab" id="tab-routines" aria-selected="' + (state.tab === 'routines') + '" aria-controls="panel" data-act="tab" data-tab="routines">Rutinas</button>' +
+        '<button class="tab" role="tab" id="tab-year" aria-selected="' + (state.tab === 'year') + '" aria-controls="panel" data-act="tab" data-tab="year">Año</button>' +
       '</div></header>';
   }
 
@@ -1476,7 +1498,100 @@ img { max-width: 100%; }
     if (state.mode === 'auth' || state.mode === 'recovery') { app.innerHTML = authHtml(); return; }
     if (state.mode === 'loading' && !userId()) { app.innerHTML = '<main class="authwrap"><p class="intro">Cargando…</p></main>'; return; }
     app.innerHTML = headerHtml() + '<main id="panel" role="tabpanel" aria-labelledby="tab-' + state.tab + '">' +
-      (state.tab === 'log' ? renderLog() : state.tab === 'plan' ? renderPlan() : renderRoutines()) + '</main>';
+      (state.tab === 'log' ? renderLog() : state.tab === 'plan' ? renderPlan() : state.tab === 'year' ? renderYear() : renderRoutines()) + '</main>';
+  }
+
+  /* ---------- Año: constancia ---------- */
+  function hasAct(date) { var a = state.logs[date]; return !!(a && Object.keys(a).length); }
+  function dayDiff(a, b) { return Math.round((parse(b) - parse(a)) / 86400000); }
+  function streaks() {
+    var dates = Object.keys(state.logs).filter(hasAct).sort();
+    var best = 0, run = 0, prev = null, set = {};
+    dates.forEach(function (d) {
+      set[d] = true;
+      run = (prev && dayDiff(prev, d) === 1) ? run + 1 : 1;
+      if (run > best) best = run;
+      prev = d;
+    });
+    var now = new Date();
+    var cursor = set[ymd(now)] ? now : addDays(now, -1), cur = 0;
+    while (set[ymd(cursor)]) { cur++; cursor = addDays(cursor, -1); }
+    return { cur: cur, best: best };
+  }
+  function ytile(label, big, small, sub) {
+    return '<div class="tile neutral"><div class="lab">' + label + '</div><div class="big">' + big + (small ? '<small>' + small + '</small>' : '') + '</div><div class="yr">' + sub + '</div></div>';
+  }
+
+  function renderYear() {
+    var y = state.year, now = new Date(), todayKey = ymd(now), curYear = now.getFullYear();
+    var st = streaks();
+    var blocks = '', total = 0, planTot = 0, planDone = 0, bestM = -1, bestN = 0;
+    for (var m = 0; m < 12; m++) {
+      var dim = new Date(y, m + 1, 0).getDate();
+      var lead = (new Date(y, m, 1).getDay() + 6) % 7;
+      var cells = '', n = 0, miss = 0;
+      for (var i = 0; i < lead; i++) cells += '<span></span>';
+      for (var d = 1; d <= dim; d++) {
+        var date = ymd(new Date(y, m, d));
+        var acts = state.logs[date] || {};
+        var plan = state.plans[date] || [];
+        var sp = SPORTS.filter(function (x) { return acts[x.id]; });
+        var cls = 'yd', style = '', label = d + ' de ' + MONTHS[m];
+        if (sp.length) {
+          n++; cls += ' on';
+          var c1 = 'var(--' + sp[0].id + ')';
+          style = sp[1] ? 'background:linear-gradient(135deg,' + c1 + ' 50%,var(--' + sp[1].id + ') 50%)' : 'background:' + c1;
+          label += ': ' + sp.map(function (x) { return x.name; }).join(', ');
+        } else if (date < todayKey) {
+          if (plan.length) { cls += ' miss'; miss++; label += ': plan sin hacer'; }
+        } else {
+          cls += plan.length ? ' fut futplan' : ' fut';
+        }
+        if (date < todayKey) plan.forEach(function (p) { planTot++; if (acts[p.sport]) planDone++; });
+        if (date === todayKey) cls += ' today';
+        cells += '<button class="' + cls + '"' + (style ? ' style="' + style + '"' : '') + ' data-act="open-day" data-date="' + date + '" aria-label="' + label + '"></button>';
+      }
+      total += n;
+      if (n > bestN) { bestN = n; bestM = m; }
+      blocks += '<section class="mblock" aria-label="' + MONTHS[m] + '"><div class="mhead">' +
+        '<button class="mname" data-act="goto-month" data-m="' + m + '">' + MONTHS[m] + '</button>' +
+        '<span class="mcount">' + n + (n === 1 ? ' día' : ' días') + (miss ? '<span class="miss"> · ' + miss + (miss === 1 ? ' fallo' : ' fallos') + '</span>' : '') + '</span></div>' +
+        '<div class="mdays">' + cells + '</div></section>';
+    }
+
+    var elapsed = y < curYear ? Math.round((new Date(y + 1, 0, 1) - new Date(y, 0, 1)) / 86400000)
+      : (y === curYear ? Math.round((parse(todayKey) - new Date(y, 0, 1)) / 86400000) + 1 : 0);
+    var wk = 0, wkAct = 0;
+    var endD = y < curYear ? new Date(y, 11, 31) : (y === curYear ? now : null);
+    if (endD) {
+      for (var w = mondayOf(new Date(y, 0, 1)); w <= endD; w = addDays(w, 7)) {
+        wk++;
+        for (var k = 0; k < 7; k++) { if (hasAct(ymd(addDays(w, k)))) { wkAct++; break; } }
+      }
+    }
+    var pct = planTot ? Math.round(planDone / planTot * 100) : null;
+
+    var tiles =
+      ytile('Días entrenados', total, total === 1 ? 'día' : 'días', elapsed ? 'de ' + elapsed + ' del año' : 'año por empezar') +
+      ytile('Racha actual', st.cur, st.cur === 1 ? 'día' : 'días', st.cur ? 'seguidos' : 'empieza hoy') +
+      ytile('Mejor racha', st.best, st.best === 1 ? 'día' : 'días', 'de todo tu historial') +
+      ytile('Semanas activas', wkAct, wk ? 'de ' + wk : '', 'con algún entreno') +
+      ytile('Plan cumplido', planTot ? planDone : '–', planTot ? 'de ' + planTot : '', pct == null ? 'nada planificado aún' : pct + ' % de lo planificado') +
+      ytile('Mejor mes', bestM >= 0 && bestN ? MONTHS_S[bestM] : '–', bestN ? bestN + (bestN === 1 ? ' día' : ' días') : '', 'más días entrenados');
+
+    return '<div class="nav">' +
+        '<button class="iconbtn" data-act="prev-year" aria-label="Año anterior">' + CHEV_L + '</button>' +
+        '<div class="title"><h2>' + y + '</h2><div class="sub">Tu constancia mes a mes</div></div>' +
+        '<button class="btn small" data-act="this-year"' + (y === curYear ? ' disabled' : '') + '>Hoy</button>' +
+        '<button class="iconbtn" data-act="next-year" aria-label="Año siguiente">' + CHEV_R + '</button>' +
+      '</div>' +
+      '<div class="tiles">' + tiles + '</div>' +
+      '<p class="intro ymsg">Cada cuadro es un día. El color es lo que entrenaste, y si hiciste dos deportes el cuadro se parte en dos colores. El rojo discontinuo marca un día con plan que no cumpliste.</p>' +
+      '<div class="ygrid">' + blocks + '</div>' +
+      '<div class="legend">' +
+        SPORTS.map(function (s) { return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + '</span>'; }).join('') +
+        '<span><i class="swp miss"></i>plan sin hacer</span><span><i class="swp rest"></i>descanso</span>' +
+      '</div>';
   }
 
   /* ---------- Hojas ---------- */
@@ -1494,6 +1609,7 @@ img { max-width: 100%; }
     panelEl.focus({ preventScroll: true });
   }
   function closeSheet() {
+    flushSheet();
     sheetEl.hidden = true;
     document.documentElement.classList.remove('lock');
     state.sheet = null;
@@ -1548,8 +1664,9 @@ img { max-width: 100%; }
       '<div><div class="lbl step-lbl">¿Qué has hecho?</div><div class="stiles">' + tiles + '</div></div>' +
       '<div class="dcards">' + cards + '</div>' +
       '<div class="tfield"><label class="lbl" for="day-note">Explica el entreno</label><textarea class="txt-in area" id="day-note" rows="3" maxlength="600" placeholder="Qué has hecho, series, pesos, ritmo, cómo te has sentido…">' + esc(note) + '</textarea></div>' +
-      '<div class="sheet-foot"><button class="btn primary" data-act="save-day">Guardar</button>' +
-      ((Object.keys(acts).length || note) ? '<button class="btn" data-act="clear-day">Borrar día</button>' : '') + '</div>'
+      '<div class="sheet-foot"><button class="btn primary" data-act="close-sheet">Listo</button>' +
+      '<button class="btn" data-act="clear-day">Borrar día</button>' +
+      '<span class="savestate" id="savestate" role="status" aria-live="polite">Se guarda solo</span></div>'
     );
   }
 
@@ -1580,27 +1697,89 @@ img { max-width: 100%; }
     return { ok: true, v: v };
   }
 
-  function saveDay() {
-    var date = state.sheet.date, acts = {};
+  /* ---------- Guardado automático ---------- */
+  var autoTimer = null;
+  function canon(v) {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') { var o = {}; Object.keys(v).sort().forEach(function (k) { o[k] = canon(v[k]); }); return o; }
+    return v;
+  }
+  function same(a, b) { return JSON.stringify(canon(a)) === JSON.stringify(canon(b)); }
+  function setSaveState(txt) { var el = q('#savestate'); if (el) el.textContent = txt; }
+  function savedText(key) { return failed[key] ? 'Sin conexión: se guardará al volver internet' : 'Guardado ✓'; }
+
+  function collectDay() {
+    var acts = {}, bad = null;
     for (var i = 0; i < SPORTS.length; i++) {
       var s = SPORTS[i];
       if (!q('#chk-' + s.id).checked) continue;
       var r = readNumber('val-' + s.id);
-      if (!r.ok) { toast('Revisa el valor de ' + s.name); q('#val-' + s.id).focus(); return; }
+      if (!r.ok) { bad = bad || s.name; continue; }
       if (s.id === 'gym') acts[s.id] = { min: r.v, routine: state.sheet.routine || null };
       else if (s.id === 'hyrox') acts[s.id] = { min: r.v, note: q('#note-hyrox').value.trim() };
       else if (s.id === 'other') {
         var kr = readNumber('km-other');
-        if (!kr.ok) { toast('Revisa los km de Otros'); q('#km-other').focus(); return; }
+        if (!kr.ok) { bad = bad || 'Otros'; continue; }
         acts[s.id] = { min: r.v, km: kr.v, note: q('#note-other').value.trim() };
       } else acts[s.id] = { km: r.v };
     }
-    var note = q('#day-note').value.trim();
-    var before = JSON.stringify(state.logs[date] || {});
-    if (before !== JSON.stringify(acts) || (state.notes[date] || '') !== note) setDay(date, acts, note);
-    closeSheet();
-    toast(Object.keys(acts).length ? 'Guardado' : 'Día vacío');
+    return { acts: acts, note: q('#day-note').value.trim(), bad: bad };
+  }
+
+  function autoSaveDay(final) {
+    clearTimeout(autoTimer);
+    var sh = state.sheet;
+    if (!sh || sh.type !== 'day' || sh.skipFlush || sheetEl.hidden) return;
+    var c = collectDay();
+    if (c.bad) { if (final) toast('Revisa el valor de ' + c.bad); setSaveState('Revisa el valor de ' + c.bad); return; }
+    var date = sh.date;
+    if (same(state.logs[date] || {}, c.acts) && (state.notes[date] || '') === c.note) return;
+    setSaveState('Guardando…');
+    var pr = setDay(date, c.acts, c.note);
     render();
+    pr.then(function () { if (state.sheet === sh) setSaveState(savedText('l-' + date)); });
+  }
+
+  function autoSavePlan(final, force) {
+    clearTimeout(autoTimer);
+    var sh = state.sheet;
+    if (!sh || sh.type !== 'plan' || sh.skipFlush || sheetEl.hidden) return;
+    var sel = q('input[name=psport]:checked');
+    if (!sel) return;
+    var sport = sel.value, km = null;
+    if (isKm(sport)) {
+      var r = readNumber('pkm');
+      if (!r.ok) { if (final) toast('Revisa los km'); setSaveState('Revisa los km'); return; }
+      km = r.v;
+    }
+    var item = { id: sh.id || uid(), sport: sport, km: km, routine: sport === 'gym' ? (sh.routine || null) : null,
+      note: sport === 'other' ? q('#pnote').value.trim() : null, text: q('#ptext').value.trim() };
+    var items = cloneItems(sh.date), idx = -1;
+    for (var i = 0; i < items.length; i++) if (items[i].id === item.id) idx = i;
+    if (idx < 0 && !sh.touched && !force) return;
+    if (idx >= 0) { if (same(items[idx], item)) return; items[idx] = item; } else items.push(item);
+    sh.id = item.id;
+    state.lastSport = sport;
+    var del = q('#plan-del'); if (del) del.hidden = false;
+    setSaveState('Guardando…');
+    var pr = setPlan(sh.date, items);
+    render();
+    pr.then(function () { if (state.sheet === sh) setSaveState(savedText('p-' + sh.date)); });
+  }
+
+  function flushSheet() {
+    var sh = state.sheet;
+    if (!sh) return;
+    if (sh.type === 'day') autoSaveDay(true);
+    else if (sh.type === 'plan') autoSavePlan(true, false);
+  }
+  function sheetAuto(immediate) {
+    var sh = state.sheet;
+    if (!sh || (sh.type !== 'day' && sh.type !== 'plan')) return;
+    if (sh.type === 'plan') sh.touched = true;
+    clearTimeout(autoTimer);
+    var run = function () { if (sh.type === 'day') autoSaveDay(false); else autoSavePlan(false, false); };
+    if (immediate) run(); else autoTimer = setTimeout(run, 600);
   }
 
   function usePlan() {
@@ -1644,36 +1823,15 @@ img { max-width: 100%; }
       '<div id="proutine-wrap" style="display:grid;gap:8px"' + (sport === 'gym' ? '' : ' hidden') + '>' + routineChipsHtml(state.sheet.routine) + '</div>' +
       '<div id="pnote-wrap" class="tfield"' + (sport === 'other' ? '' : ' hidden') + '><label class="lbl" for="pnote">¿Qué deporte?</label><input class="txt-in" id="pnote" type="text" maxlength="40" placeholder="Pádel, fútbol, senderismo…" value="' + (it && it.note ? esc(it.note) : '') + '"></div>' +
       '<div class="tfield"><label class="lbl" for="ptext">Explica el entreno (opcional)</label><textarea class="txt-in area" id="ptext" rows="3" maxlength="400" placeholder="Ej: 10 × 400 m a ritmo fuerte, 1 min de descanso">' + esc(it && it.text ? it.text : '') + '</textarea></div>' +
-      '<div class="sheet-foot"><button class="btn primary" data-act="save-plan">' + (it ? 'Guardar' : 'Añadir') + '</button>' +
-      (it ? '<button class="btn" data-act="delete-plan">Quitar</button>' : '') + '</div>'
+      '<div class="sheet-foot"><button class="btn primary" data-act="plan-done">' + (it ? 'Listo' : 'Añadir') + '</button>' +
+      '<button class="btn" id="plan-del" data-act="delete-plan"' + (it ? '' : ' hidden') + '>Quitar</button>' +
+      '<span class="savestate" id="savestate" role="status" aria-live="polite">' + (it ? 'Se guarda solo' : '') + '</span></div>'
     );
-  }
-
-  function savePlan() {
-    var sh = state.sheet, date = sh.date;
-    var sel = q('input[name=psport]:checked');
-    if (!sel) return;
-    var sport = sel.value, km = null;
-    if (isKm(sport)) {
-      var r = readNumber('pkm');
-      if (!r.ok) { toast('Revisa los km'); q('#pkm').focus(); return; }
-      km = r.v;
-    }
-    var routine = sport === 'gym' ? (sh.routine || null) : null;
-    var note = sport === 'other' ? q('#pnote').value.trim() : null;
-    var text = q('#ptext').value.trim();
-    var items = cloneItems(date);
-    if (sh.id) {
-      for (var i = 0; i < items.length; i++) if (items[i].id === sh.id) { items[i].sport = sport; items[i].km = km; items[i].routine = routine; items[i].note = note; items[i].text = text; }
-    } else items.push({ id: uid(), sport: sport, km: km, routine: routine, note: note, text: text });
-    state.lastSport = sport;
-    setPlan(date, items);
-    closeSheet();
-    render();
   }
 
   function deletePlan() {
     var sh = state.sheet;
+    sh.skipFlush = true;
     setPlan(sh.date, cloneItems(sh.date).filter(function (x) { return x.id !== sh.id; }));
     closeSheet();
     render();
@@ -1782,12 +1940,19 @@ img { max-width: 100%; }
       case 'repeat-4': repeat4(); break;
       case 'clear-week': clearWeek(); break;
       case 'close-sheet': closeSheet(); break;
-      case 'save-day': saveDay(); break;
+      case 'plan-done': autoSavePlan(true, true); closeSheet(); break;
+      case 'prev-year': state.year--; render(); break;
+      case 'next-year': state.year++; render(); break;
+      case 'this-year': state.year = new Date().getFullYear(); render(); break;
+      case 'goto-month':
+        state.month = new Date(state.year, parseInt(el.getAttribute('data-m'), 10), 1);
+        state.tab = 'log'; render(); window.scrollTo(0, 0); break;
       case 'clear-day':
+        state.sheet.skipFlush = true;
         setDay(state.sheet.date, {}, '');
         closeSheet(); render(); toast('Día borrado');
         break;
-      case 'use-plan': usePlan(); break;
+      case 'use-plan': usePlan(); sheetAuto(true); break;
       case 'chip':
         var sp = el.getAttribute('data-sport');
         if (state.sheet && state.sheet.type === 'day') {
@@ -1795,12 +1960,13 @@ img { max-width: 100%; }
           if (!cb.checked) { cb.checked = true; toggleRow(sp, true); }
           q('#val-' + sp).value = dec(el.getAttribute('data-v'));
         } else q('#pkm').value = dec(el.getAttribute('data-v'));
+        sheetAuto(true);
         break;
-      case 'save-plan': savePlan(); break;
       case 'pick-routine':
         var rt = el.getAttribute('data-routine');
         state.sheet.routine = state.sheet.routine === rt ? null : rt;
         syncRoutineChips();
+        sheetAuto(true);
         break;
       case 'ex-inc': stepSets(el.getAttribute('data-r'), id, 1); break;
       case 'ex-dec': stepSets(el.getAttribute('data-r'), id, -1); break;
@@ -1827,7 +1993,17 @@ img { max-width: 100%; }
       q('#pnote-wrap').hidden = t.value !== 'other';
       if (kmSport) q('#pchips').innerHTML = chipsHtml(t.value);
     }
+    sheetAuto(true);
   });
+
+  document.addEventListener('input', function (e) {
+    if (state.sheet && panelEl.contains(e.target)) sheetAuto(false);
+  });
+  document.addEventListener('click', function (e) {
+    if (state.sheet && state.sheet.type === 'plan' && e.target.closest && e.target.closest('.segopt')) setTimeout(function () { sheetAuto(true); }, 0);
+  });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) flushSheet(); });
+  window.addEventListener('pagehide', flushSheet);
 
   document.addEventListener('submit', function (e) {
     var f = e.target;
