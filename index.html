@@ -582,8 +582,9 @@ img { max-width: 100%; }
   var DAYS_S = ['lun','mar','mié','jue','vie','sáb','dom'];
   var WD_HEAD = ['L','M','X','J','V','S','D'];
 
-  var nf = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 1 });
-  function fmt(n) { return nf.format(Math.round(n * 10) / 10); }
+  var nf = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });
+  function fmt(n) { return nf.format(Math.round(n * 100) / 100); }
+  function dec(v) { return v == null || v === '' ? '' : String(v).replace('.', ','); }
   function pad(n) { return String(n).padStart(2, '0'); }
   function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
   function parse(s) { var p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
@@ -1000,7 +1001,7 @@ img { max-width: 100%; }
     return '<div class="tfield"><label class="lbl" for="note-other">¿Qué deporte?</label>' +
       '<input class="txt-in" id="note-other" type="text" maxlength="40" placeholder="Pádel, fútbol, senderismo…" value="' + (a && a.note ? esc(a.note) : '') + '"></div>' +
       '<div class="field"><label for="km-other">Distancia (opcional)</label>' +
-      '<input class="num-in" id="km-other" type="number" inputmode="decimal" min="0" step="any" value="' + (a && a.km != null ? a.km : '') + '"><span class="unit">km</span></div>';
+      '<input class="num-in" id="km-other" type="text" inputmode="decimal" autocomplete="off" placeholder="0,0" value="' + dec(a && a.km) + '"><span class="unit">km</span></div>';
   }
 
 /* Dibujos de ejercicios: dos poses (inicio y final) en vista lateral, figura de palitos */
@@ -1532,7 +1533,7 @@ img { max-width: 100%; }
       return '<div class="dcard s-' + s.id + '" id="row-' + s.id + '"' + (a ? '' : ' hidden') + '>' +
         '<div class="dtitle"><i class="sw"></i>' + s.name + '</div>' +
         '<div class="field"><label for="val-' + s.id + '">' + s.label + '</label>' +
-        '<input class="num-in big" id="val-' + s.id + '" type="number" inputmode="decimal" min="0" step="any" value="' + (v == null ? '' : v) + '">' +
+        '<input class="num-in big" id="val-' + s.id + '" type="text" inputmode="decimal" autocomplete="off" placeholder="0,0" value="' + dec(v) + '">' +
         '<span class="unit">' + s.unit + '</span></div>' +
         '<div class="chips">' + chipsHtml(s.id) + '</div>' +
         (s.id === 'gym' ? routineChipsHtml(a && a.routine) : '') +
@@ -1572,7 +1573,7 @@ img { max-width: 100%; }
 
 
   function readNumber(id) {
-    var raw = q('#' + id).value.trim().replace(',', '.');
+    var raw = q('#' + id).value.trim().replace(/\s+/g, '').replace(/km$/i, '').replace(',', '.');
     if (raw === '') return { ok: true, v: null };
     var v = Number(raw);
     if (!isFinite(v) || v < 0 || v > 1000) return { ok: false };
@@ -1609,7 +1610,7 @@ img { max-width: 100%; }
       if (cb.checked) return;
       cb.checked = true;
       toggleRow(p.sport, true);
-      if (p.sport !== 'gym' && p.km != null) q('#val-' + p.sport).value = p.km;
+      if (p.sport !== 'gym' && p.km != null) q('#val-' + p.sport).value = dec(p.km);
       if (p.sport === 'gym' && p.routine) { state.sheet.routine = p.routine; syncRoutineChips(); }
       if (p.sport === 'other' && p.note) q('#note-other').value = p.note;
       if (p.text) { var dn = q('#day-note'); if (dn && dn.value.indexOf(p.text) < 0) dn.value = (dn.value ? dn.value + '\n' : '') + p.text; }
@@ -1638,7 +1639,7 @@ img { max-width: 100%; }
       '<fieldset class="seg"><legend class="sr">Deporte</legend>' + opts + '</fieldset>' +
       '<div id="pkm-wrap" style="display:grid;gap:8px"' + (!isKm(sport) ? ' hidden' : '') + '>' +
         '<div class="field"><label for="pkm">Km previstos (opcional)</label>' +
-        '<input class="num-in" id="pkm" type="number" inputmode="decimal" min="0" step="any" value="' + (it && it.km != null ? it.km : '') + '"><span class="unit">km</span></div>' +
+        '<input class="num-in" id="pkm" type="text" inputmode="decimal" autocomplete="off" placeholder="0,0" value="' + dec(it && it.km) + '"><span class="unit">km</span></div>' +
         '<div class="chips" id="pchips">' + chipsHtml(isKm(sport) ? sport : 'run') + '</div></div>' +
       '<div id="proutine-wrap" style="display:grid;gap:8px"' + (sport === 'gym' ? '' : ' hidden') + '>' + routineChipsHtml(state.sheet.routine) + '</div>' +
       '<div id="pnote-wrap" class="tfield"' + (sport === 'other' ? '' : ' hidden') + '><label class="lbl" for="pnote">¿Qué deporte?</label><input class="txt-in" id="pnote" type="text" maxlength="40" placeholder="Pádel, fútbol, senderismo…" value="' + (it && it.note ? esc(it.note) : '') + '"></div>' +
@@ -1792,8 +1793,8 @@ img { max-width: 100%; }
         if (state.sheet && state.sheet.type === 'day') {
           var cb = q('#chk-' + sp);
           if (!cb.checked) { cb.checked = true; toggleRow(sp, true); }
-          q('#val-' + sp).value = el.getAttribute('data-v');
-        } else q('#pkm').value = el.getAttribute('data-v');
+          q('#val-' + sp).value = dec(el.getAttribute('data-v'));
+        } else q('#pkm').value = dec(el.getAttribute('data-v'));
         break;
       case 'save-plan': savePlan(); break;
       case 'pick-routine':
