@@ -1,5 +1,5 @@
 /* Guarda la app para abrirla al instante y sin conexión. Los datos van por Supabase, no por aquí. */
-var VERSION = 'entrenos-v9';
+var VERSION = 'entrenos-v10';
 var SHELL = ['./', 'index.html', 'vendor/supabase.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
@@ -16,7 +16,7 @@ self.addEventListener('fetch', function (e) {
   var url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then(function (res) {
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then(function (res) {
       var copy = res.clone();
       caches.open(VERSION).then(function (c) { c.put('index.html', copy); });
       return res;
@@ -24,7 +24,7 @@ self.addEventListener('fetch', function (e) {
     return;
   }
   e.respondWith(caches.match(req).then(function (hit) {
-    var net = fetch(req).then(function (res) {
+    var net = fetch(req, { cache: 'no-cache' }).then(function (res) {
       if (res && res.ok) { var copy = res.clone(); caches.open(VERSION).then(function (c) { c.put(req, copy); }); }
       return res;
     }).catch(function () { return hit; });
