@@ -2053,6 +2053,7 @@ img { max-width: 100%; }
   function stravaBtnHtml() {
     if (state.strava === 'off') return '<button class="linkbtn" data-act="strava-connect">Conectar Strava</button>';
     if (state.strava === 'on') return '<button class="linkbtn" data-act="strava-sync">Strava ✓</button>';
+    if (state.strava === 'err') return '<button class="linkbtn" data-act="strava-sync">Strava ⚠</button>';
     return '';
   }
   async function stravaCall(body) {
@@ -2073,7 +2074,8 @@ img { max-width: 100%; }
   function stravaErr(e) {
     if (e && e.code === 'rate_limit') return 'Strava: demasiadas consultas, prueba en unos minutos.';
     if (e && e.code === 'secret_missing') return 'Falta terminar de configurar Strava en el servidor.';
-    return 'No se pudo hablar con Strava. Prueba de nuevo.';
+    if (e && e.code === 'auth') return 'Vuelve a iniciar sesión y prueba otra vez.';
+    return 'No se pudo hablar con el servidor de Strava' + (e && e.message ? ' (' + e.message + ')' : '') + '.';
   }
   /* Añade lo que falta; nunca pisa lo que ya apuntaste a mano. */
   function stravaMerge(list) {
@@ -2124,7 +2126,10 @@ img { max-width: 100%; }
       else if (manual) toast('Strava al día');
       stravaLast = Date.now();
       if (sheetEl.hidden) render();
-    } catch (e) { if (manual) toast(stravaErr(e)); }
+    } catch (e) {
+      if (state.strava !== 'on') { state.strava = 'err'; if (sheetEl.hidden) render(); }
+      if (manual) toast(stravaErr(e));
+    }
     stravaBusy = false;
   }
   async function stravaFinish() {
