@@ -444,7 +444,8 @@ button { cursor: pointer; }
 .kick { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .todaycard { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
 .tcbody { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
-#app { overflow-x: clip; }
+html, body { overflow-x: clip; }
+#app { position: relative; }
 #panel { touch-action: pan-y; }
 .weekcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 10px; }
 .weekcard .wkhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -2205,13 +2206,27 @@ img { max-width: 100%; }
     if (!document.hidden && state.strava === 'on' && Date.now() - stravaLast > 300000) stravaSync(false);
   });
 
-  /* ---------- Deslizar para cambiar de pestaña (la pantalla sigue al dedo) ---------- */
+  /* ---------- Deslizar para cambiar de pestaña (se ve la pantalla de al lado) ---------- */
   var TAB_ORDER = ['log', 'plan', 'routines', 'year'];
   var drag = null;
   var reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   function getPanel() { return document.getElementById('panel'); }
-  function resetPanel(p) { if (p) { p.style.transition = ''; p.style.transform = ''; p.style.opacity = ''; p.style.willChange = ''; } }
+  function resetPanel(p) { if (p) { p.style.transition = ''; p.style.transform = ''; p.style.willChange = ''; } }
   function neighbor(dx) { var i = TAB_ORDER.indexOf(state.tab), j = i + (dx < 0 ? 1 : -1); return (i < 0 || j < 0 || j >= TAB_ORDER.length) ? null : TAB_ORDER[j]; }
+  function tabHtml(t) { return t === 'log' ? renderLog() : t === 'plan' ? renderPlan() : t === 'year' ? renderYear() : renderRoutines(); }
+
+  function makeGhost(tabId) {
+    var p = getPanel(), app = document.getElementById('app'), hd = app.querySelector('header.top');
+    var pr = p.getBoundingClientRect(), ar = app.getBoundingClientRect();
+    var top = Math.max(hd ? hd.getBoundingClientRect().bottom : pr.top, pr.top);
+    var g = document.createElement('main');
+    g.className = 'ghostpanel'; g.setAttribute('aria-hidden', 'true');
+    g.innerHTML = tabHtml(tabId);
+    g.style.cssText = 'position:absolute;left:' + (pr.left - ar.left) + 'px;top:' + (top - ar.top) + 'px;width:' + pr.width + 'px;height:' + Math.max(240, window.innerHeight - top) + 'px;overflow:hidden;pointer-events:none;will-change:transform;transition:none;';
+    app.appendChild(g);
+    return g;
+  }
+  function dropGhost() { if (drag && drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost); if (drag) { drag.ghost = null; drag.ghostTab = null; } }
 
   document.addEventListener('touchstart', function (e) {
     if (drag && drag.busy) return;
@@ -2220,7 +2235,7 @@ img { max-width: 100%; }
     var t = e.touches[0], w = window.innerWidth, tg = e.target;
     if (t.clientX < 28 || t.clientX > w - 28) return; /* bordes: reservados al gesto "atrás" del iPhone */
     if (!getPanel() || !(tg.closest && tg.closest('#panel')) || tg.closest('input, textarea, select')) return;
-    drag = { x: t.clientX, y: t.clientY, t: Date.now(), axis: null, dx: 0 };
+    drag = { x: t.clientX, y: t.clientY, t: Date.now(), axis: null, dx: 0, w: window.innerWidth, ghost: null, ghostTab: null };
   }, { passive: true });
 
   document.addEventListener('touchmove', function (e) {
@@ -2234,43 +2249,42 @@ img { max-width: 100%; }
     if (drag.axis !== 'x') return;
     var p = getPanel(); if (!p) { drag = null; return; }
     drag.dx = dx;
-    var shown = neighbor(dx) ? dx : dx * 0.25; /* sin pestaña al otro lado: se resiste */
+    var nb = neighbor(dx);
+    if (nb !== drag.ghostTab) {
+      dropGhost();
+      if (nb) { drag.ghost = makeGhost(nb); drag.ghostTab = nb; }
+    }
+    var shown = nb ? dx : dx * 0.25; /* sin pestaña al otro lado: se resiste */
     p.style.transform = 'translate3d(' + shown + 'px,0,0)';
-    p.style.opacity = String(1 - Math.min(0.5, Math.abs(shown) / (window.innerWidth * 1.6)));
+    if (drag.ghost) drag.ghost.style.transform = 'translate3d(' + (shown + (dx < 0 ? drag.w : -drag.w)) + 'px,0,0)';
   }, { passive: true });
 
   function endDrag(cancel) {
-    var d = drag; if (!d || d.axis !== 'x' || d.busy) { if (d && !d.busy) drag = null; return; }
-    var p = getPanel(), w = window.innerWidth, dx = d.dx, dt = Math.max(1, Date.now() - d.t);
+    var d = drag; if (!d || d.busy) return;
+    if (d.axis !== 'x') { drag = null; return; }
+    var p = getPanel(), w = d.w, dx = d.dx, dt = Math.max(1, Date.now() - d.t);
     var nxt = neighbor(dx);
     var fast = Math.abs(dx) > 40 && Math.abs(dx) / dt > 0.45;
-    var go = !cancel && nxt && (Math.abs(dx) > w * 0.33 || fast);
-    if (!p) { drag = null; return; }
+    var go = !cancel && nxt && d.ghost && (Math.abs(dx) > w * 0.33 || fast);
+    if (!p) { dropGhost(); drag = null; return; }
     d.busy = true;
-    var ms = reduceMotion ? 0 : 220;
-    if (!go) {
-      p.style.transition = ms ? 'transform .2s ease-out, opacity .2s ease-out' : 'none';
-      p.style.transform = 'translate3d(0,0,0)'; p.style.opacity = '1';
-      setTimeout(function () { resetPanel(getPanel()); drag = null; }, ms + 30);
-      return;
-    }
+    var ms = reduceMotion ? 0 : 240, ease = ms ? 'transform ' + ms + 'ms cubic-bezier(.25,.8,.3,1)' : 'none';
     var sign = dx < 0 ? -1 : 1;
-    p.style.transition = ms ? 'transform ' + ms + 'ms cubic-bezier(.3,.7,.4,1), opacity ' + ms + 'ms ease-out' : 'none';
-    p.style.transform = 'translate3d(' + (sign * w) + 'px,0,0)'; p.style.opacity = '0';
+    p.style.transition = ease;
+    if (d.ghost) d.ghost.style.transition = ease;
+    if (go) {
+      p.style.transform = 'translate3d(' + (sign * w) + 'px,0,0)';
+      d.ghost.style.transform = 'translate3d(0,0,0)';
+    } else {
+      p.style.transform = 'translate3d(0,0,0)';
+      if (d.ghost) d.ghost.style.transform = 'translate3d(' + (-sign * w) + 'px,0,0)';
+    }
     setTimeout(function () {
-      state.tab = nxt;
-      render();
-      window.scrollTo(0, 0);
-      var np = getPanel();
-      if (np && ms) {
-        np.style.transition = 'none'; np.style.opacity = '0';
-        np.style.transform = 'translate3d(' + (-sign * w) + 'px,0,0)';
-        void np.offsetWidth;
-        np.style.transition = 'transform ' + ms + 'ms cubic-bezier(.2,.8,.3,1), opacity ' + ms + 'ms ease-out';
-        np.style.transform = 'translate3d(0,0,0)'; np.style.opacity = '1';
-        setTimeout(function () { resetPanel(getPanel()); drag = null; }, ms + 30);
-      } else { drag = null; }
-    }, ms);
+      if (go) { state.tab = nxt; render(); window.scrollTo(0, 0); }
+      else resetPanel(getPanel());
+      dropGhost();
+      drag = null;
+    }, ms + 20);
   }
   document.addEventListener('touchend', function () { endDrag(false); }, { passive: true });
   document.addEventListener('touchcancel', function () { endDrag(true); }, { passive: true });
