@@ -447,6 +447,15 @@ button { cursor: pointer; }
 .todaycard { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
 .tcbody { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
 html, body { overflow-x: clip; }
+.tabs.five .tab { font-size: 12.5px; padding-inline: 2px; }
+.sub2 { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.memos { display: grid; gap: 8px; margin-top: 12px; }
+.memo { text-align: left; display: grid; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; color: var(--ink); min-width: 0; }
+.memo[class*="s-"] { border-color: color-mix(in srgb, var(--c) 45%, var(--line)); background: color-mix(in srgb, var(--c) 10%, var(--surface)); }
+.mtop { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mtop b { font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdate { font-size: 12px; color: var(--ink-3); flex: none; font-variant-numeric: tabular-nums; }
+.mprev { font-size: 13.5px; color: var(--ink-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .sportsrow { display: flex; justify-content: center; margin-top: 14px; }
 #app { position: relative; }
 #panel { touch-action: pan-y; }
@@ -584,7 +593,7 @@ img { max-width: 100%; }
   function sportOn(id) { return !state.sports || state.sports.indexOf(id) >= 0; }
   /* Deportes que se ven: los activos + los que aún tienen algo en esa pantalla (para no esconder datos). */
   function sportsOn(extra) { return SPORTS.filter(function (x) { return sportOn(x.id) || (extra && extra[x.id]); }); }
-  function tabOrder() { return sportOn('gym') ? ['log', 'plan', 'routines', 'year'] : ['log', 'plan', 'year']; }
+  function tabOrder() { return sportOn('gym') ? ['log', 'plan', 'routines', 'year', 'notes'] : ['log', 'plan', 'year', 'notes']; }
   function zeroes() { var o = {}; SPORTS.forEach(function (x) { o[x.id] = 0; }); return o; }
   var GROUPS = ['Pecho', 'Hombro', 'Tríceps', 'Espalda', 'Bíceps', 'Cuádriceps', 'Femoral', 'Glúteo', 'Gemelo'];
   var DEFAULT_ROUTINES = [
@@ -670,7 +679,8 @@ img { max-width: 100%; }
     sheet: null,
     confirm: null,
     lastSport: 'run',
-    sports: null /* null = todos; si no, lista de deportes activos */
+    sports: null, /* null = todos; si no, lista de deportes activos */
+    memos: []
   };
 
   /* ---------- Cuenta y guardado (Supabase) ---------- */
@@ -708,7 +718,7 @@ img { max-width: 100%; }
   function cacheKey() { return 'entrenos-cache-' + userId(); }
   function cacheSave() {
     if (!userId()) return;
-    try { localStorage.setItem(cacheKey(), JSON.stringify({ logs: state.logs, plans: state.plans, routines: state.routines, notes: state.notes, sports: state.sports })); } catch (e) {}
+    try { localStorage.setItem(cacheKey(), JSON.stringify({ logs: state.logs, plans: state.plans, routines: state.routines, notes: state.notes, sports: state.sports, memos: state.memos })); } catch (e) {}
   }
   function cacheLoad() {
     try {
@@ -720,6 +730,7 @@ img { max-width: 100%; }
       state.routines = o.routines || null;
       state.notes = o.notes || {};
       state.sports = Array.isArray(o.sports) ? o.sports : null;
+      state.memos = Array.isArray(o.memos) ? o.memos : [];
       return true;
     } catch (e) { return false; }
   }
@@ -740,6 +751,10 @@ img { max-width: 100%; }
       } else if (kind === 'p') {
         q = data ? sb.from('plans').upsert({ user_id: uid, day: date, items: data.items, updated_at: now }, { onConflict: 'user_id,day' })
                  : sb.from('plans').delete().eq('day', date);
+      } else if (kind === 'm') {
+        var mm = state.memos.filter(function (x) { return x.id === date; })[0];
+        q = mm ? sb.from('memos').upsert({ user_id: uid, id: mm.id, title: mm.title, body: mm.body, sport: mm.sport || null, updated_at: mm.updated }, { onConflict: 'user_id,id' })
+               : sb.from('memos').delete().eq('id', date);
       } else if (kind === 's') {
         q = sb.from('prefs').upsert({ user_id: uid, sports: state.sports || SPORTS.map(function (x) { return x.id; }), updated_at: now }, { onConflict: 'user_id' });
       } else {
@@ -772,14 +787,16 @@ img { max-width: 100%; }
   }
 
   async function loadAll() {
-    var res = await Promise.all([fetchAll('entries'), fetchAll('plans'), sb.from('routines').select('data').maybeSingle(), sb.from('prefs').select('sports').maybeSingle()]);
+    var res = await Promise.all([fetchAll('entries'), fetchAll('plans'), sb.from('routines').select('data').maybeSingle(), sb.from('prefs').select('sports').maybeSingle(), sb.from('memos').select('*').order('updated_at', { ascending: false }).limit(2000)]);
     if (res[2].error) throw res[2].error;
     if (res[3].error) throw res[3].error;
-    applyRemote(res[0], res[1], res[2].data, res[3].data);
+    if (res[4].error) throw res[4].error;
+    applyRemote(res[0], res[1], res[2].data, res[3].data, res[4].data);
   }
 
-  function applyRemote(entries, plansRows, routinesRow, prefsRow) {
+  function applyRemote(entries, plansRows, routinesRow, prefsRow, memoRows) {
     var logs = {}, plans = {}, notes = {}, routines = null, sports = null;
+    var memos = (memoRows || []).map(function (r) { return { id: r.id, title: r.title || '', body: r.body || '', sport: r.sport || null, updated: r.updated_at }; });
     var okIds = SPORTS.map(function (x) { return x.id; });
     if (prefsRow && Array.isArray(prefsRow.sports)) { sports = prefsRow.sports.filter(function (x) { return okIds.indexOf(x) >= 0; }); if (!sports.length) sports = null; }
     state.noPrefs = !prefsRow;
@@ -793,6 +810,12 @@ img { max-width: 100%; }
     keys.forEach(function (k) {
       if (k === 'r-main') { routines = state.routines; return; }
       if (k === 's-main') { sports = state.sports; return; }
+      if (k.charAt(0) === 'm') {
+        var mid = k.slice(2), loc = state.memos.filter(function (x) { return x.id === mid; })[0];
+        memos = memos.filter(function (x) { return x.id !== mid; });
+        if (loc) memos.push(loc);
+        return;
+      }
       var date = k.slice(2);
       if (k.charAt(0) === 'l') {
         var a = state.logs[date];
@@ -809,6 +832,7 @@ img { max-width: 100%; }
     state.routines = routines;
     state.notes = notes;
     state.sports = sports;
+    state.memos = memos;
     cacheSave();
   }
 
@@ -842,11 +866,12 @@ img { max-width: 100%; }
   function headerHtml() {
     return '<header class="top">' +
       '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + stravaBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
-      '<div class="tabs" role="tablist" aria-label="Secciones" style="--tabs:' + tabOrder().length + '">' +
+      '<div class="tabs' + (tabOrder().length >= 5 ? ' five' : '') + '" role="tablist" aria-label="Secciones" style="--tabs:' + tabOrder().length + '">' +
         '<button class="tab" role="tab" id="tab-log" aria-selected="' + (state.tab === 'log') + '" aria-controls="panel" data-act="tab" data-tab="log">Registro</button>' +
         '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Plan</button>' +
         (sportOn('gym') ? '<button class="tab" role="tab" id="tab-routines" aria-selected="' + (state.tab === 'routines') + '" aria-controls="panel" data-act="tab" data-tab="routines">Rutinas</button>' : '') +
         '<button class="tab" role="tab" id="tab-year" aria-selected="' + (state.tab === 'year') + '" aria-controls="panel" data-act="tab" data-tab="year">Año</button>' +
+        '<button class="tab" role="tab" id="tab-notes" aria-selected="' + (state.tab === 'notes') + '" aria-controls="panel" data-act="tab" data-tab="notes">Notas</button>' +
       '</div></header>';
   }
 
@@ -1049,7 +1074,7 @@ img { max-width: 100%; }
 
     var progExtra = {};
     SPORTS.forEach(function (s) { if (planned[s.id] > 0 || doneT[s.id] > 0) progExtra[s.id] = true; });
-    var prog = sportsOn(progExtra).map(function (s) {
+    var prog = SPORTS.filter(function (s) { return progExtra[s.id]; }).map(function (s) {
       var p = planned[s.id], d = doneT[s.id];
       var pct = p > 0 ? Math.min(100, d / p * 100) : 0;
       var txt;
@@ -1092,7 +1117,7 @@ img { max-width: 100%; }
         '<button class="iconbtn" data-act="next-week" aria-label="Semana siguiente">' + CHEV_R + '</button>' +
       '</div>' +
       '<div class="panel" aria-label="Progreso de la semana">' + prog +
-        (anyPlan ? '' : '<div class="rest">Esta semana no tiene sesiones planificadas. Usa el + de cada día.</div>') +
+        (prog ? '' : '<div class="rest">Todavía no hay nada planificado ni hecho esta semana. Usa el + de cada día.</div>') +
       '</div>' +
       '<ul class="plist">' + rows + '</ul>' +
       '<div class="actions">' +
@@ -1487,7 +1512,7 @@ img { max-width: 100%; }
 
   async function startSession() {
     var uid = userId();
-    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null; state.noPrefs = false;
+    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null; state.noPrefs = false; state.memos = [];
     pending = {}; failed = {}; chains = {};
     state.strava = 'unknown';
     var cached = cacheLoad();
@@ -1575,7 +1600,7 @@ img { max-width: 100%; }
     var id = userId();
     try { if (id) localStorage.removeItem('entrenos-cache-' + id); } catch (e) {}
     session = null;
-    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null;
+    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null; state.memos = [];
     pending = {}; failed = {}; chains = {};
     state.mode = 'auth'; authView = 'login'; state.strava = 'unknown';
     if (!sheetEl.hidden) closeSheet();
@@ -1589,7 +1614,74 @@ img { max-width: 100%; }
     if (state.mode === 'loading' && !userId()) { app.innerHTML = '<main class="authwrap"><p class="intro">Cargando…</p></main>'; return; }
     if (state.tab === 'routines' && !sportOn('gym')) state.tab = 'log';
     app.innerHTML = headerHtml() + '<main id="panel" role="tabpanel" aria-labelledby="tab-' + state.tab + '">' +
-      (state.tab === 'log' ? renderLog() : state.tab === 'plan' ? renderPlan() : state.tab === 'year' ? renderYear() : renderRoutines()) + '</main>';
+      tabHtml(state.tab) + '</main>';
+  }
+
+  /* ---------- Notas: entrenos concretos ---------- */
+  function memoTitle(m) {
+    if (m.title) return m.title;
+    var first = (m.body || '').split('\n').filter(function (l) { return l.trim(); })[0];
+    return first ? first.trim().slice(0, 60) : 'Sin título';
+  }
+  function memoDate(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.getDate() + ' ' + MONTHS_S[d.getMonth()]; }
+  function renderNotes() {
+    var list = state.memos.slice().sort(function (a, b) { return String(b.updated).localeCompare(String(a.updated)); });
+    var cards = list.map(function (m) {
+      var prev = (m.body || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+      if (!m.title && prev) prev = prev.slice(memoTitle(m).length).trim();
+      return '<button class="memo' + (m.sport && SPORT[m.sport] ? ' s-' + m.sport : '') + '" data-act="open-memo" data-id="' + esc(m.id) + '">' +
+        '<span class="mtop">' + (m.sport && SPORT[m.sport] ? '<i class="sw"></i>' : '') + '<b>' + esc(memoTitle(m)) + '</b><span class="mdate">' + memoDate(m.updated) + '</span></span>' +
+        (prev ? '<span class="mprev">' + esc(prev) + '</span>' : '') + '</button>';
+    }).join('');
+    return '<div class="nav"><div class="title"><h2>Notas</h2><div class="sub2">Entrenos concretos, series, pesos, ritmos…</div></div>' +
+      '<button class="btn primary small" data-act="new-memo">+ Nueva nota</button></div>' +
+      (cards ? '<div class="memos">' + cards + '</div>' : '<p class="empty-note">Aquí apuntas entrenos específicos: un circuito, una tirada larga, una serie de pesos… Pulsa «Nueva nota» para empezar.</p>');
+  }
+  function openMemo(id) {
+    if (state.mode === 'loading') { toast('Cargando tus datos…'); return; }
+    var m = id ? state.memos.filter(function (x) { return x.id === id; })[0] : null;
+    if (id && !m) return;
+    state.sheet = { type: 'memo', id: m ? m.id : uid() + uid(), touched: false };
+    var extra = {}; if (m && m.sport) extra[m.sport] = true;
+    var opts = '<label class="segopt"><input type="radio" name="msport" value=""' + (!m || !m.sport ? ' checked' : '') + '><span>Ninguno</span></label>' +
+      sportsOn(extra).map(function (s) {
+        return '<label class="segopt s-' + s.id + '"><input type="radio" name="msport" value="' + s.id + '"' + (m && m.sport === s.id ? ' checked' : '') + '><span><i class="sw"></i>' + s.name + '</span></label>';
+      }).join('');
+    openSheet(
+      '<div class="sheet-head"><div><div class="kick">' + (m ? 'Nota' : 'Nueva nota') + '</div><h2 id="sheet-title">' + (m ? esc(memoTitle(m)) : 'Apunta tu entreno') + '</h2></div>' +
+      '<button class="x" data-act="close-sheet" aria-label="Cerrar">' + CLOSE + '</button></div>' +
+      '<div class="tfield"><label class="lbl" for="memo-title">Título</label><input class="txt-in" id="memo-title" type="text" maxlength="80" placeholder="Por ejemplo: Pierna del lunes" value="' + esc(m ? m.title : '') + '"></div>' +
+      '<div><div class="lbl step-lbl">Deporte (opcional)</div><div class="seg">' + opts + '</div></div>' +
+      '<div class="tfield"><label class="lbl" for="memo-body">Nota</label><textarea class="txt-in area" id="memo-body" rows="8" maxlength="8000" placeholder="Series, pesos, ritmos, circuitos… lo que quieras recordar.">' + esc(m ? m.body : '') + '</textarea></div>' +
+      '<div class="sheet-foot"><button class="btn primary" data-act="close-sheet">Listo</button>' +
+      '<button class="btn" data-act="del-memo"' + (m ? '' : ' hidden') + ' id="memo-del">Borrar nota</button>' +
+      '<span class="savestate" id="savestate" role="status" aria-live="polite">' + (m ? 'Se guarda sola' : '') + '</span></div>'
+    );
+    if (!m) { var t0 = q('#memo-title'); if (t0) setTimeout(function () { try { t0.focus(); } catch (e) {} }, 60); }
+  }
+  function autoSaveMemo(final) {
+    clearTimeout(autoTimer);
+    var sh = state.sheet;
+    if (!sh || sh.type !== 'memo' || sh.skipFlush || sheetEl.hidden) return;
+    var tEl = q('#memo-title'), bEl = q('#memo-body'); if (!tEl || !bEl) return;
+    var title = tEl.value.trim(), body = bEl.value, sel = q('input[name=msport]:checked'), sport = sel && sel.value ? sel.value : null;
+    var cur = state.memos.filter(function (x) { return x.id === sh.id; })[0];
+    if (!cur && !sh.touched) return;
+    var empty = !title && !body.trim();
+    if (!cur && empty) return;
+    if (cur && empty) {
+      state.memos = state.memos.filter(function (x) { return x.id !== sh.id; });
+      persist('m', sh.id); render();
+      return;
+    }
+    if (cur && cur.title === title && cur.body === body && (cur.sport || null) === sport) return;
+    var m = { id: sh.id, title: title, body: body, sport: sport, updated: new Date().toISOString() };
+    if (cur) state.memos[state.memos.indexOf(cur)] = m; else state.memos.push(m);
+    var del = q('#memo-del'); if (del) del.hidden = false;
+    setSaveState('Guardando…');
+    var pr = persist('m', sh.id);
+    render();
+    pr.then(function () { if (state.sheet === sh) setSaveState(savedText('m-' + sh.id)); });
   }
 
   /* ---------- Año: constancia ---------- */
@@ -1898,13 +1990,14 @@ img { max-width: 100%; }
     if (!sh) return;
     if (sh.type === 'day') autoSaveDay(true);
     else if (sh.type === 'plan') autoSavePlan(true, false);
+    else if (sh.type === 'memo') autoSaveMemo(true);
   }
   function sheetAuto(immediate) {
     var sh = state.sheet;
-    if (!sh || (sh.type !== 'day' && sh.type !== 'plan')) return;
-    if (sh.type === 'plan') sh.touched = true;
+    if (!sh || (sh.type !== 'day' && sh.type !== 'plan' && sh.type !== 'memo')) return;
+    if (sh.type === 'plan' || sh.type === 'memo') sh.touched = true;
     clearTimeout(autoTimer);
-    var run = function () { if (sh.type === 'day') autoSaveDay(false); else autoSavePlan(false, false); };
+    var run = function () { if (sh.type === 'day') autoSaveDay(false); else if (sh.type === 'memo') autoSaveMemo(false); else autoSavePlan(false, false); };
     if (immediate) run(); else autoTimer = setTimeout(run, 600);
   }
 
@@ -2083,6 +2176,20 @@ img { max-width: 100%; }
         break;
       case 'use-plan': usePlan(); sheetAuto(true); break;
       case 'open-sports': openSports(); break;
+      case 'new-memo': openMemo(null); break;
+      case 'open-memo': openMemo(el.getAttribute('data-id')); break;
+      case 'del-memo':
+        if (!el.getAttribute('data-armed')) {
+          el.setAttribute('data-armed', '1'); el.textContent = '¿Seguro? Pulsa otra vez';
+          setTimeout(function () { if (el.isConnected) { el.removeAttribute('data-armed'); el.textContent = 'Borrar nota'; } }, 4000);
+          break;
+        }
+        var delId = state.sheet.id;
+        state.sheet.skipFlush = true;
+        state.memos = state.memos.filter(function (x) { return x.id !== delId; });
+        persist('m', delId);
+        closeSheet(); render(); toast('Nota borrada');
+        break;
       case 'chip':
         var sp = el.getAttribute('data-sport');
         if (state.sheet && state.sheet.type === 'day') {
@@ -2134,7 +2241,7 @@ img { max-width: 100%; }
     if (state.sheet && panelEl.contains(e.target)) sheetAuto(false);
   });
   document.addEventListener('click', function (e) {
-    if (state.sheet && state.sheet.type === 'plan' && e.target.closest && e.target.closest('.segopt')) setTimeout(function () { sheetAuto(true); }, 0);
+    if (state.sheet && (state.sheet.type === 'plan' || state.sheet.type === 'memo') && e.target.closest && e.target.closest('.segopt')) setTimeout(function () { sheetAuto(true); }, 0);
   });
   document.addEventListener('visibilitychange', function () { if (document.hidden) flushSheet(); });
   window.addEventListener('pagehide', flushSheet);
@@ -2266,7 +2373,7 @@ img { max-width: 100%; }
     } catch (e) { toast(stravaErr(e)); }
   }
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && state.strava === 'on' && Date.now() - stravaLast > 300000) stravaSync(false);
+    if (!document.hidden && state.strava === 'on' && Date.now() - stravaLast > 60000) stravaSync(false);
   });
 
   /* ---------- Deslizar para cambiar de pestaña (se ve la pantalla de al lado) ---------- */
@@ -2275,7 +2382,7 @@ img { max-width: 100%; }
   function getPanel() { return document.getElementById('panel'); }
   function resetPanel(p) { if (p) { p.style.transition = ''; p.style.transform = ''; p.style.willChange = ''; } }
   function neighbor(dx) { var o = tabOrder(), i = o.indexOf(state.tab), j = i + (dx < 0 ? 1 : -1); return (i < 0 || j < 0 || j >= o.length) ? null : o[j]; }
-  function tabHtml(t) { return t === 'log' ? renderLog() : t === 'plan' ? renderPlan() : t === 'year' ? renderYear() : renderRoutines(); }
+  function tabHtml(t) { return t === 'log' ? renderLog() : t === 'plan' ? renderPlan() : t === 'year' ? renderYear() : t === 'notes' ? renderNotes() : renderRoutines(); }
 
   function makeGhost(tabId) {
     var p = getPanel(), app = document.getElementById('app'), hd = app.querySelector('header.top');
@@ -2350,6 +2457,10 @@ img { max-width: 100%; }
   }
   document.addEventListener('touchend', function () { endDrag(false); }, { passive: true });
   document.addEventListener('touchcancel', function () { endDrag(true); }, { passive: true });
+
+  setInterval(function () {
+    if (!document.hidden && state.strava === 'on' && sheetEl.hidden && !state.locked && Date.now() - stravaLast > 120000) stravaSync(false);
+  }, 60000);
 
   /* ---------- Arranque ---------- */
   function refreshFromServer() {
