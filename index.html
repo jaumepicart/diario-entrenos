@@ -770,7 +770,7 @@ img { max-width: 100%; }
 
   function headerHtml() {
     return '<header class="top">' +
-      '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span><button class="linkbtn" data-act="logout">Salir</button></span></div>' +
+      '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
       '<div class="tabs" role="tablist" aria-label="Secciones">' +
         '<button class="tab" role="tab" id="tab-log" aria-selected="' + (state.tab === 'log') + '" aria-controls="panel" data-act="tab" data-tab="log">Registro</button>' +
         '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Planificador</button>' +
@@ -1384,7 +1384,78 @@ img { max-width: 100%; }
     if (userId() === uid) render();
   }
 
+  /* ---------- Bloqueo con Face ID / huella (WebAuthn, solo en este dispositivo) ---------- */
+  var LOCK_KEY = 'entrenos-lock';
+  var lockAvail = false;
+  var hiddenAt = 0;
+  var LOCK_AFTER_MS = 60000;
+  function isApple() { return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function bioName() { return isApple() ? 'Face ID' : 'huella o rostro'; }
+  function b64u(buf) { var t = ''; new Uint8Array(buf).forEach(function (x) { t += String.fromCharCode(x); }); return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function unb64u(str) { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; var bin = atob(str), a = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+  function rnd(n) { var a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
+  function lockId() { try { return localStorage.getItem(LOCK_KEY); } catch (e) { return null; } }
+  function lockEnabled() { return !!lockId(); }
+
+  function lockBtnHtml() {
+    if (!lockAvail && !lockEnabled()) return '';
+    return '<button class="linkbtn" data-act="lock-toggle">' + (lockEnabled() ? 'Quitar bloqueo' : 'Activar ' + esc(bioName())) + '</button>';
+  }
+  function lockHtml() {
+    return '<main class="authwrap"><div class="authcard">' +
+      '<h1 class="authtitle">Diario de entrenos</h1>' +
+      '<p class="intro">App bloqueada. Usa ' + esc(bioName()) + ' para entrar.</p>' +
+      '<p class="autherr" id="autherr" role="alert"></p>' +
+      '<button class="btn primary" data-act="unlock">Desbloquear con ' + esc(bioName()) + '</button>' +
+      '<button class="linkbtn center" data-act="lock-reset">No puedo desbloquear: entrar con contraseña</button>' +
+      '</div></main>';
+  }
+
+  async function enableLock() {
+    try {
+      var cred = await navigator.credentials.create({ publicKey: {
+        challenge: rnd(32),
+        rp: { name: 'Diario de Entrenos' },
+        user: { id: rnd(16), name: userEmail() || 'usuario', displayName: 'Entrenos' },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+        timeout: 60000, attestation: 'none'
+      } });
+      if (!cred) throw new Error('sin credencial');
+      localStorage.setItem(LOCK_KEY, b64u(cred.rawId));
+      toast('Bloqueo activado');
+      render();
+    } catch (e) { toast('No se pudo activar el bloqueo.'); }
+  }
+  async function verifyLock() {
+    var id = lockId();
+    if (!id) return true;
+    var r = await navigator.credentials.get({ publicKey: {
+      challenge: rnd(32),
+      allowCredentials: [{ type: 'public-key', id: unb64u(id), transports: ['internal'] }],
+      userVerification: 'required', timeout: 60000
+    } });
+    return !!r;
+  }
+  async function unlock(auto) {
+    try {
+      if (await verifyLock()) { state.locked = false; hiddenAt = 0; render(); }
+    } catch (e) { if (!auto) authMsg('No se pudo verificar. Inténtalo otra vez.'); }
+  }
+  async function disableLock() {
+    try {
+      if (await verifyLock()) { localStorage.removeItem(LOCK_KEY); toast('Bloqueo quitado'); render(); }
+    } catch (e) { toast('No se pudo verificar.'); }
+  }
+  function lockNow() {
+    state.locked = true;
+    if (!sheetEl.hidden) closeSheet();
+    render();
+    setTimeout(function () { unlock(true); }, 250);
+  }
+
   function endSession() {
+    try { localStorage.removeItem(LOCK_KEY); } catch (e) {}
     var id = userId();
     try { if (id) localStorage.removeItem('entrenos-cache-' + id); } catch (e) {}
     session = null;
@@ -1397,6 +1468,7 @@ img { max-width: 100%; }
 
   function render() {
     var app = document.getElementById('app');
+    if (state.locked) { app.innerHTML = lockHtml(); return; }
     if (state.mode === 'auth' || state.mode === 'recovery') { app.innerHTML = authHtml(); return; }
     if (state.mode === 'loading' && !userId()) { app.innerHTML = '<main class="authwrap"><p class="intro">Cargando…</p></main>'; return; }
     app.innerHTML = headerHtml() + '<main id="panel" role="tabpanel" aria-labelledby="tab-' + state.tab + '">' +
@@ -1684,6 +1756,14 @@ img { max-width: 100%; }
         authView = el.getAttribute('data-v'); render(); break;
       case 'forgot': doForgot(); break;
       case 'logout': if (sb) sb.auth.signOut(); break;
+      case 'lock-toggle': if (lockEnabled()) disableLock(); else enableLock(); break;
+      case 'unlock': unlock(false); break;
+      case 'lock-reset':
+        try { localStorage.removeItem(LOCK_KEY); } catch (e) {}
+        state.locked = false;
+        if (sb) sb.auth.signOut();
+        render();
+        break;
       case 'prev-month': state.month = new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1); render(); break;
       case 'next-month': state.month = new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1); render(); break;
       case 'this-month': var n = new Date(); state.month = new Date(n.getFullYear(), n.getMonth(), 1); render(); break;
@@ -1782,6 +1862,18 @@ img { max-width: 100%; }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshFromServer(); });
   window.addEventListener('online', refreshFromServer);
 
+  state.locked = lockEnabled();
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (lockEnabled() && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS && !state.locked) lockNow();
+  });
+  if (window.PublicKeyCredential && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) {
+    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function (ok) {
+      lockAvail = !!ok;
+      if (ok && !state.locked && sheetEl.hidden) render();
+    }).catch(function () {});
+  }
+
   if (!window.supabase || !window.supabase.createClient) {
     state.mode = 'off';
     render();
@@ -1801,6 +1893,8 @@ img { max-width: 100%; }
       }
     });
   }
+
+  if (state.locked) setTimeout(function () { unlock(true); }, 300);
 
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
