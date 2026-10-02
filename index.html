@@ -2410,9 +2410,12 @@ img { max-width: 100%; }
     Object.keys(ghosts).forEach(function (k) {
       if (want.indexOf(k) < 0) { var g = ghosts[k]; if (g && g.parentNode) g.parentNode.removeChild(g); delete ghosts[k]; }
     });
-    want.forEach(function (t) { if (t && !ghosts[t]) ghosts[t] = makeGhost(t); });
+    var todo = want.filter(function (t) { return t && !ghosts[t]; });
+    if (!todo.length) return;
+    ghosts[todo[0]] = makeGhost(todo[0]);   /* una por vez, para no bloquear el móvil */
+    if (todo.length > 1) ghostTimer = setTimeout(prebuildGhosts, 250);
   }
-  function schedulePrebuild() { clearTimeout(ghostTimer); ghostTimer = setTimeout(prebuildGhosts, 300); }
+  function schedulePrebuild() { clearTimeout(ghostTimer); ghostTimer = setTimeout(prebuildGhosts, 900); }
   function hideGhost(g) { if (g) { g.style.visibility = 'hidden'; g.style.transition = ''; g.style.transform = ''; g.style.willChange = ''; } }
   function showGhost(tabId) {
     var g = ghosts[tabId];
@@ -2495,7 +2498,8 @@ img { max-width: 100%; }
       var g = d.ghost, old = getPanel();
       if (go) {
         state.tab = nxt;
-        if (g && old && g.parentNode && window.scrollY < 2) {
+        if (g && old && g.parentNode) {
+          window.scrollTo(0, 0);
           /* la pantalla que ya está dibujada pasa a ser la buena: sin repintar, sin parpadeo */
           delete ghosts[nxt];
           g.removeAttribute('style'); g.removeAttribute('aria-hidden'); g.className = '';
