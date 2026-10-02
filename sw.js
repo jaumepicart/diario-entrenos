@@ -1,5 +1,5 @@
 /* Guarda la app para abrirla al instante y sin conexión. Los datos van por Supabase, no por aquí. */
-var VERSION = 'entrenos-v6';
+var VERSION = 'entrenos-v7';
 var SHELL = ['./', 'index.html', 'vendor/supabase.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
