@@ -536,6 +536,16 @@ img { max-width: 100%; }
 <script>
 (function () {
   'use strict';
+  var stravaReturn = null;
+  try {
+    var spq = new URLSearchParams(location.search);
+    if (spq.get('state') && spq.get('state') === localStorage.getItem('strava-state')) {
+      if (spq.get('code')) stravaReturn = { code: spq.get('code'), scope: spq.get('scope') || '' };
+      else if (spq.get('error')) stravaReturn = { denied: true };
+      localStorage.removeItem('strava-state');
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch (e) {}
 
   var SPORTS = [
     { id: 'gym',   name: 'Gym',      kind: 'time', unit: 'min', label: 'Minutos (opcional)', chips: [45, 60, 90] },
@@ -795,7 +805,7 @@ img { max-width: 100%; }
 
   function headerHtml() {
     return '<header class="top">' +
-      '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
+      '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + stravaBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
       '<div class="tabs" role="tablist" aria-label="Secciones">' +
         '<button class="tab" role="tab" id="tab-log" aria-selected="' + (state.tab === 'log') + '" aria-controls="panel" data-act="tab" data-tab="log">Registro</button>' +
         '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Plan</button>' +
@@ -1402,12 +1412,14 @@ img { max-width: 100%; }
     var uid = userId();
     state.logs = {}; state.plans = {}; state.routines = null; state.notes = {};
     pending = {}; failed = {}; chains = {};
+    state.strava = 'unknown';
     var cached = cacheLoad();
     state.mode = cached ? 'db' : 'loading';
     render();
     try { await loadAll(); state.mode = 'db'; }
     catch (e) { state.mode = cached ? 'offline' : 'off'; }
     if (userId() === uid) render();
+    if (userId() === uid && state.mode === 'db') { if (stravaReturn) stravaFinish(); else stravaSync(false); }
   }
 
   /* ---------- Bloqueo con Face ID / huella (WebAuthn, solo en este dispositivo) ---------- */
@@ -1487,7 +1499,7 @@ img { max-width: 100%; }
     session = null;
     state.logs = {}; state.plans = {}; state.routines = null; state.notes = {};
     pending = {}; failed = {}; chains = {};
-    state.mode = 'auth'; authView = 'login';
+    state.mode = 'auth'; authView = 'login'; state.strava = 'unknown';
     if (!sheetEl.hidden) closeSheet();
     render();
   }
@@ -1918,6 +1930,8 @@ img { max-width: 100%; }
         authView = el.getAttribute('data-v'); render(); break;
       case 'forgot': doForgot(); break;
       case 'logout': if (sb) sb.auth.signOut(); break;
+      case 'strava-connect': stravaConnect(); break;
+      case 'strava-sync': stravaSync(true); break;
       case 'lock-toggle': if (lockEnabled()) disableLock(); else enableLock(); break;
       case 'unlock': unlock(false); break;
       case 'lock-reset':
@@ -2029,6 +2043,106 @@ img { max-width: 100%; }
   setInterval(checkDay, 60000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) checkDay(); });
   window.addEventListener('focus', checkDay);
+
+  /* ---------- Strava (los tokens viven solo en el servidor) ---------- */
+  var STRAVA_FN = SUPA_URL + '/functions/v1/strava';
+  var STRAVA_CLIENT_ID = '284065';
+  var stravaBusy = false, stravaLast = 0;
+  state.strava = 'unknown';
+
+  function stravaBtnHtml() {
+    if (state.strava === 'off') return '<button class="linkbtn" data-act="strava-connect">Conectar Strava</button>';
+    if (state.strava === 'on') return '<button class="linkbtn" data-act="strava-sync">Strava ✓</button>';
+    return '';
+  }
+  async function stravaCall(body) {
+    var g = await sb.auth.getSession();
+    var tok = g && g.data && g.data.session && g.data.session.access_token;
+    if (!tok) throw new Error('auth');
+    var r = await fetch(STRAVA_FN, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok, 'apikey': SUPA_KEY }, body: JSON.stringify(body) });
+    var j = null; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { var er = new Error((j && j.error) || ('http' + r.status)); er.code = j && j.error; throw er; }
+    return j;
+  }
+  function stravaConnect() {
+    var st = Array.prototype.map.call(rnd(16), function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+    try { localStorage.setItem('strava-state', st); } catch (e) {}
+    var redirect = location.origin + location.pathname;
+    location.href = 'https://www.strava.com/oauth/authorize?client_id=' + STRAVA_CLIENT_ID + '&response_type=code&redirect_uri=' + encodeURIComponent(redirect) + '&approval_prompt=auto&scope=activity:read_all&state=' + st;
+  }
+  function stravaErr(e) {
+    if (e && e.code === 'rate_limit') return 'Strava: demasiadas consultas, prueba en unos minutos.';
+    if (e && e.code === 'secret_missing') return 'Falta terminar de configurar Strava en el servidor.';
+    return 'No se pudo hablar con Strava. Prueba de nuevo.';
+  }
+  /* Añade lo que falta; nunca pisa lo que ya apuntaste a mano. */
+  function stravaMerge(list) {
+    var g = {}, count = 0, ps = [], keys = [];
+    list.forEach(function (a) {
+      var d = g[a.day] = g[a.day] || {};
+      var x = d[a.sport] = d[a.sport] || { km: 0, min: 0, names: [], n: 0 };
+      x.km += a.km || 0; x.min += a.min || 0; x.n++;
+      if (a.name && x.names.indexOf(a.name) < 0) x.names.push(a.name);
+    });
+    Object.keys(g).forEach(function (day) {
+      var cur = state.logs[day] || {}, next = {}, changed = false;
+      Object.keys(cur).forEach(function (k) { next[k] = cur[k]; });
+      Object.keys(g[day]).forEach(function (sp) {
+        if (next[sp]) return;
+        var v = g[day][sp], km = Math.round(v.km * 100) / 100, nm = v.names.join(' · ');
+        if (sp === 'gym') next[sp] = { min: v.min, routine: null };
+        else if (sp === 'hyrox') next[sp] = { min: v.min, note: nm };
+        else if (sp === 'other') next[sp] = { min: v.min, km: km > 0 ? km : null, note: nm };
+        else next[sp] = { km: km };
+        count += v.n; changed = true;
+      });
+      if (changed) { state.logs[day] = next; keys.push('l-' + day); ps.push(persist('l', day)); }
+    });
+    return { count: count, ps: ps, keys: keys };
+  }
+  async function stravaSync(manual) {
+    if (stravaBusy || !sb || !userId() || state.mode !== 'db') return;
+    stravaBusy = true;
+    try {
+      var r = await stravaCall({ action: 'sync' });
+      if (!r.connected) {
+        state.strava = 'off';
+        if (manual || r.reason === 'revoked') toast(r.reason === 'revoked' ? 'Strava se desconectó. Vuelve a conectarlo.' : 'Strava no está conectado.');
+        if (sheetEl.hidden) render();
+        stravaBusy = false; return;
+      }
+      state.strava = 'on';
+      var acts = r.activities || [];
+      var m = stravaMerge(acts);
+      await Promise.all(m.ps);
+      var lost = m.keys.some(function (k) { return failed[k]; });
+      if (acts.length && !lost) {
+        var upto = 0; acts.forEach(function (a) { if (a.start > upto) upto = a.start; });
+        await stravaCall({ action: 'ack', ids: acts.map(function (a) { return a.id; }), upto: upto });
+      }
+      if (m.count) toast('Strava: ' + m.count + (m.count === 1 ? ' entreno nuevo' : ' entrenos nuevos'));
+      else if (manual) toast('Strava al día');
+      stravaLast = Date.now();
+      if (sheetEl.hidden) render();
+    } catch (e) { if (manual) toast(stravaErr(e)); }
+    stravaBusy = false;
+  }
+  async function stravaFinish() {
+    var r = stravaReturn; stravaReturn = null;
+    if (!r) return;
+    if (r.denied) { toast('No has dado permiso a Strava.'); return stravaSync(false); }
+    if (r.scope.indexOf('activity:read') < 0) { toast('Strava necesita permiso para ver tus actividades. Vuelve a conectar y deja esa casilla marcada.'); return stravaSync(false); }
+    try {
+      var y = new Date().getFullYear();
+      await stravaCall({ action: 'connect', code: r.code, since: Math.floor(new Date(y, 0, 1).getTime() / 1000) });
+      state.strava = 'on';
+      toast('Strava conectado. Importando entrenos…');
+      await stravaSync(true);
+    } catch (e) { toast(stravaErr(e)); }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && state.strava === 'on' && Date.now() - stravaLast > 300000) stravaSync(false);
+  });
 
   /* ---------- Arranque ---------- */
   function refreshFromServer() {
