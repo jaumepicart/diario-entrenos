@@ -83,7 +83,9 @@ button { cursor: pointer; }
   line-height: 1;
 }
 .status { font-size: 12px; color: var(--ink-3); }
-\1grid-template-columns: repeat(4, minmax(0, 1fr));
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(var(--tabs, 4), minmax(0, 1fr));
   gap: 4px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -445,6 +447,7 @@ button { cursor: pointer; }
 .todaycard { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
 .tcbody { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
 html, body { overflow-x: clip; }
+.sportsrow { display: flex; justify-content: center; margin-top: 14px; }
 #app { position: relative; }
 #panel { touch-action: pan-y; }
 .weekcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 10px; }
@@ -578,6 +581,10 @@ img { max-width: 100%; }
   SPORTS.forEach(function (s, i) { s.idx = i; SPORT[s.id] = s; });
 
   function isKm(id) { return SPORT[id] && SPORT[id].kind === 'km'; }
+  function sportOn(id) { return !state.sports || state.sports.indexOf(id) >= 0; }
+  /* Deportes que se ven: los activos + los que aún tienen algo en esa pantalla (para no esconder datos). */
+  function sportsOn(extra) { return SPORTS.filter(function (x) { return sportOn(x.id) || (extra && extra[x.id]); }); }
+  function tabOrder() { return sportOn('gym') ? ['log', 'plan', 'routines', 'year'] : ['log', 'plan', 'year']; }
   function zeroes() { var o = {}; SPORTS.forEach(function (x) { o[x.id] = 0; }); return o; }
   var GROUPS = ['Pecho', 'Hombro', 'Tríceps', 'Espalda', 'Bíceps', 'Cuádriceps', 'Femoral', 'Glúteo', 'Gemelo'];
   var DEFAULT_ROUTINES = [
@@ -662,7 +669,8 @@ img { max-width: 100%; }
     mode: 'loading',
     sheet: null,
     confirm: null,
-    lastSport: 'run'
+    lastSport: 'run',
+    sports: null /* null = todos; si no, lista de deportes activos */
   };
 
   /* ---------- Cuenta y guardado (Supabase) ---------- */
@@ -700,7 +708,7 @@ img { max-width: 100%; }
   function cacheKey() { return 'entrenos-cache-' + userId(); }
   function cacheSave() {
     if (!userId()) return;
-    try { localStorage.setItem(cacheKey(), JSON.stringify({ logs: state.logs, plans: state.plans, routines: state.routines, notes: state.notes })); } catch (e) {}
+    try { localStorage.setItem(cacheKey(), JSON.stringify({ logs: state.logs, plans: state.plans, routines: state.routines, notes: state.notes, sports: state.sports })); } catch (e) {}
   }
   function cacheLoad() {
     try {
@@ -711,6 +719,7 @@ img { max-width: 100%; }
       state.plans = o.plans || {};
       state.routines = o.routines || null;
       state.notes = o.notes || {};
+      state.sports = Array.isArray(o.sports) ? o.sports : null;
       return true;
     } catch (e) { return false; }
   }
@@ -731,6 +740,8 @@ img { max-width: 100%; }
       } else if (kind === 'p') {
         q = data ? sb.from('plans').upsert({ user_id: uid, day: date, items: data.items, updated_at: now }, { onConflict: 'user_id,day' })
                  : sb.from('plans').delete().eq('day', date);
+      } else if (kind === 's') {
+        q = sb.from('prefs').upsert({ user_id: uid, sports: state.sports || SPORTS.map(function (x) { return x.id; }), updated_at: now }, { onConflict: 'user_id' });
       } else {
         q = sb.from('routines').upsert({ user_id: uid, data: state.routines || [], updated_at: now }, { onConflict: 'user_id' });
       }
@@ -761,13 +772,17 @@ img { max-width: 100%; }
   }
 
   async function loadAll() {
-    var res = await Promise.all([fetchAll('entries'), fetchAll('plans'), sb.from('routines').select('data').maybeSingle()]);
+    var res = await Promise.all([fetchAll('entries'), fetchAll('plans'), sb.from('routines').select('data').maybeSingle(), sb.from('prefs').select('sports').maybeSingle()]);
     if (res[2].error) throw res[2].error;
-    applyRemote(res[0], res[1], res[2].data);
+    if (res[3].error) throw res[3].error;
+    applyRemote(res[0], res[1], res[2].data, res[3].data);
   }
 
-  function applyRemote(entries, plansRows, routinesRow) {
-    var logs = {}, plans = {}, notes = {}, routines = null;
+  function applyRemote(entries, plansRows, routinesRow, prefsRow) {
+    var logs = {}, plans = {}, notes = {}, routines = null, sports = null;
+    var okIds = SPORTS.map(function (x) { return x.id; });
+    if (prefsRow && Array.isArray(prefsRow.sports)) { sports = prefsRow.sports.filter(function (x) { return okIds.indexOf(x) >= 0; }); if (!sports.length) sports = null; }
+    state.noPrefs = !prefsRow;
     entries.forEach(function (r) {
       if (r.acts && Object.keys(r.acts).length) logs[r.day] = r.acts;
       if (r.note) notes[r.day] = r.note;
@@ -777,6 +792,7 @@ img { max-width: 100%; }
     var keys = Object.keys(pending).filter(function (k) { return pending[k] > 0; }).concat(Object.keys(failed));
     keys.forEach(function (k) {
       if (k === 'r-main') { routines = state.routines; return; }
+      if (k === 's-main') { sports = state.sports; return; }
       var date = k.slice(2);
       if (k.charAt(0) === 'l') {
         var a = state.logs[date];
@@ -792,6 +808,7 @@ img { max-width: 100%; }
     state.plans = plans;
     state.routines = routines;
     state.notes = notes;
+    state.sports = sports;
     cacheSave();
   }
 
@@ -825,10 +842,10 @@ img { max-width: 100%; }
   function headerHtml() {
     return '<header class="top">' +
       '<div class="brand"><h1>Diario de entrenos</h1><span class="status"><span class="stxt">' + esc(statusText()) + '</span>' + lockBtnHtml() + stravaBtnHtml() + '<button class="linkbtn" data-act="logout">Salir</button></span></div>' +
-      '<div class="tabs" role="tablist" aria-label="Secciones">' +
+      '<div class="tabs" role="tablist" aria-label="Secciones" style="--tabs:' + tabOrder().length + '">' +
         '<button class="tab" role="tab" id="tab-log" aria-selected="' + (state.tab === 'log') + '" aria-controls="panel" data-act="tab" data-tab="log">Registro</button>' +
         '<button class="tab" role="tab" id="tab-plan" aria-selected="' + (state.tab === 'plan') + '" aria-controls="panel" data-act="tab" data-tab="plan">Plan</button>' +
-        '<button class="tab" role="tab" id="tab-routines" aria-selected="' + (state.tab === 'routines') + '" aria-controls="panel" data-act="tab" data-tab="routines">Rutinas</button>' +
+        (sportOn('gym') ? '<button class="tab" role="tab" id="tab-routines" aria-selected="' + (state.tab === 'routines') + '" aria-controls="panel" data-act="tab" data-tab="routines">Rutinas</button>' : '') +
         '<button class="tab" role="tab" id="tab-year" aria-selected="' + (state.tab === 'year') + '" aria-controls="panel" data-act="tab" data-tab="year">Año</button>' +
       '</div></header>';
   }
@@ -944,7 +961,7 @@ img { max-width: 100%; }
     var isCurrent = now.getFullYear() === y && now.getMonth() === mo;
     var todayKey = ymd(now);
 
-    var tiles = SPORTS.map(function (s) {
+    var tiles = sportsOn().map(function (s) {
       var big, unit, yr;
       if (!isKm(s.id)) {
         big = String(t.m[s.id]); unit = t.m[s.id] === 1 ? 'día' : 'días';
@@ -998,9 +1015,10 @@ img { max-width: 100%; }
         WD_HEAD.map(function (w) { return '<span class="wd" aria-hidden="true">' + w + '</span>'; }).join('') + cells +
       '</div>' +
       '<div class="legend">' +
-        SPORTS.map(function (s) { return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + '</span>'; }).join('') +
+        sportsOn().map(function (s) { return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + '</span>'; }).join('') +
         '<span><i class="swp"></i>planificado</span>' +
-      '</div></div>' + monthList(y, mo);
+      '</div></div>' +
+      '<div class="sportsrow"><button class="btn small" data-act="open-sports">Elegir mis deportes</button></div>' + monthList(y, mo);
   }
 
   /* ---------- Vista: planificador ---------- */
@@ -1029,7 +1047,9 @@ img { max-width: 100%; }
       });
     });
 
-    var prog = SPORTS.map(function (s) {
+    var progExtra = {};
+    SPORTS.forEach(function (s) { if (planned[s.id] > 0 || doneT[s.id] > 0) progExtra[s.id] = true; });
+    var prog = sportsOn(progExtra).map(function (s) {
       var p = planned[s.id], d = doneT[s.id];
       var pct = p > 0 ? Math.min(100, d / p * 100) : 0;
       var txt;
@@ -1467,7 +1487,7 @@ img { max-width: 100%; }
 
   async function startSession() {
     var uid = userId();
-    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {};
+    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null; state.noPrefs = false;
     pending = {}; failed = {}; chains = {};
     state.strava = 'unknown';
     var cached = cacheLoad();
@@ -1476,6 +1496,7 @@ img { max-width: 100%; }
     try { await loadAll(); state.mode = 'db'; }
     catch (e) { state.mode = cached ? 'offline' : 'off'; }
     if (userId() === uid) render();
+    if (userId() === uid && state.mode === 'db' && state.noPrefs && !Object.keys(state.logs).length && !Object.keys(state.plans).length && sheetEl.hidden && !state.locked) openSports();
     if (userId() === uid && state.mode === 'db') { if (stravaReturn) stravaFinish(); else stravaSync(false); }
   }
 
@@ -1554,7 +1575,7 @@ img { max-width: 100%; }
     var id = userId();
     try { if (id) localStorage.removeItem('entrenos-cache-' + id); } catch (e) {}
     session = null;
-    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {};
+    state.logs = {}; state.plans = {}; state.routines = null; state.notes = {}; state.sports = null;
     pending = {}; failed = {}; chains = {};
     state.mode = 'auth'; authView = 'login'; state.strava = 'unknown';
     if (!sheetEl.hidden) closeSheet();
@@ -1566,6 +1587,7 @@ img { max-width: 100%; }
     if (state.locked) { app.innerHTML = lockHtml(); return; }
     if (state.mode === 'auth' || state.mode === 'recovery') { app.innerHTML = authHtml(); return; }
     if (state.mode === 'loading' && !userId()) { app.innerHTML = '<main class="authwrap"><p class="intro">Cargando…</p></main>'; return; }
+    if (state.tab === 'routines' && !sportOn('gym')) state.tab = 'log';
     app.innerHTML = headerHtml() + '<main id="panel" role="tabpanel" aria-labelledby="tab-' + state.tab + '">' +
       (state.tab === 'log' ? renderLog() : state.tab === 'plan' ? renderPlan() : state.tab === 'year' ? renderYear() : renderRoutines()) + '</main>';
   }
@@ -1658,7 +1680,7 @@ img { max-width: 100%; }
       '<p class="intro ymsg">Cada cuadro es un día. El color es lo que entrenaste, y si hiciste dos deportes el cuadro se parte en dos colores. El rojo discontinuo marca un día con plan que no cumpliste.</p>' +
       '<div class="ygrid">' + blocks + '</div>' +
       '<div class="legend">' +
-        SPORTS.map(function (s) { return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + '</span>'; }).join('') +
+        sportsOn().map(function (s) { return '<span class="s-' + s.id + '"><i class="sw"></i>' + s.name + '</span>'; }).join('') +
         '<span><i class="swp miss"></i>plan sin hacer</span><span><i class="swp rest"></i>descanso</span>' +
       '</div>';
   }
@@ -1679,10 +1701,40 @@ img { max-width: 100%; }
   }
   function closeSheet() {
     flushSheet();
+    var wasSports = state.sheet && state.sheet.type === 'sports';
     sheetEl.hidden = true;
     document.documentElement.classList.remove('lock');
     state.sheet = null;
+    if (wasSports) render();
     if (lastFocus && lastFocus.focus) { try { lastFocus.focus({ preventScroll: true }); } catch (e) {} }
+  }
+
+  function openSports() {
+    state.sheet = { type: 'sports' };
+    var used = {};
+    Object.keys(state.logs).forEach(function (d) { Object.keys(state.logs[d] || {}).forEach(function (k) { used[k] = true; }); });
+    var tiles = SPORTS.map(function (s) {
+      return '<label class="stile s-' + s.id + '"><input type="checkbox" data-sp="' + s.id + '"' + (sportOn(s.id) ? ' checked' : '') + '><span class="stbody"><i class="sw"></i><b>' + s.name + '</b></span></label>';
+    }).join('');
+    openSheet(
+      '<div class="sheet-head"><div><div class="kick">Ajustes</div><h2 id="sheet-title">Mis deportes</h2></div>' +
+      '<button class="x" data-act="close-sheet" aria-label="Cerrar">' + CLOSE + '</button></div>' +
+      '<p class="intro">Marca los que haces. Los demás quedan guardados en la recámara: no se borra nada y puedes activarlos cuando quieras.</p>' +
+      '<div class="stiles">' + tiles + '</div>' +
+      '<div class="sheet-foot"><button class="btn primary" data-act="close-sheet">Listo</button></div>'
+    );
+    if (state.noPrefs) { state.noPrefs = false; persist('s', 'main'); }
+  }
+  function setSport(id, on) {
+    var cur = state.sports ? state.sports.slice() : SPORTS.map(function (x) { return x.id; });
+    var i = cur.indexOf(id);
+    if (on && i < 0) cur.push(id);
+    if (!on && i >= 0) cur.splice(i, 1);
+    if (!cur.length) return false;
+    cur.sort(function (a, b) { return SPORT[a].idx - SPORT[b].idx; });
+    state.sports = cur.length === SPORTS.length ? null : cur;
+    persist('s', 'main');
+    return true;
   }
 
   function chipsHtml(sport) {
@@ -1708,11 +1760,15 @@ img { max-width: 100%; }
       hint = '<div class="hint"><span><b>Tenías planificado</b><br>' + txt + '</span><button type="button" class="btn small" data-act="use-plan">Usar plan</button></div>';
     }
 
-    var tiles = SPORTS.map(function (s) {
+    var dayExtra = {};
+    Object.keys(acts).forEach(function (k) { dayExtra[k] = true; });
+    plan.forEach(function (p) { dayExtra[p.sport] = true; });
+    var shownSports = sportsOn(dayExtra);
+    var tiles = shownSports.map(function (s) {
       return '<label class="stile s-' + s.id + '"><input type="checkbox" id="chk-' + s.id + '" data-sport="' + s.id + '"' + (acts[s.id] ? ' checked' : '') + '><span class="stbody"><i class="sw"></i><b>' + s.name + '</b></span></label>';
     }).join('');
 
-    var cards = SPORTS.map(function (s) {
+    var cards = shownSports.map(function (s) {
       var a = acts[s.id];
       var v = a ? actValue(s.id, a) : null;
       return '<div class="dcard s-' + s.id + '" id="row-' + s.id + '"' + (a ? '' : ' hidden') + '>' +
@@ -1781,7 +1837,8 @@ img { max-width: 100%; }
     var acts = {}, bad = null;
     for (var i = 0; i < SPORTS.length; i++) {
       var s = SPORTS[i];
-      if (!q('#chk-' + s.id).checked) continue;
+      var chkEl = q('#chk-' + s.id);
+      if (!chkEl || !chkEl.checked) continue;
       var r = readNumber('val-' + s.id);
       if (!r.ok) { bad = bad || s.name; continue; }
       if (s.id === 'gym') acts[s.id] = { min: r.v, routine: state.sheet.routine || null };
@@ -1855,7 +1912,7 @@ img { max-width: 100%; }
     var plan = state.plans[state.sheet.date] || [];
     plan.forEach(function (p) {
       var cb = q('#chk-' + p.sport);
-      if (cb.checked) return;
+      if (!cb || cb.checked) return;
       cb.checked = true;
       toggleRow(p.sport, true);
       if (p.sport !== 'gym' && p.km != null) q('#val-' + p.sport).value = dec(p.km);
@@ -1877,7 +1934,8 @@ img { max-width: 100%; }
     var sport = it ? it.sport : state.lastSport;
     state.sheet = { type: 'plan', date: date, id: it ? it.id : null, routine: (it && it.routine) || null };
 
-    var opts = SPORTS.map(function (s) {
+    var optExtra = {}; if (sport) optExtra[sport] = true;
+    var opts = sportsOn(optExtra).map(function (s) {
       return '<label class="segopt s-' + s.id + '"><input type="radio" name="psport" id="ps-' + s.id + '" value="' + s.id + '"' + (s.id === sport ? ' checked' : '') + '><span><i class="sw"></i>' + s.name + '</span></label>';
     }).join('');
 
@@ -2024,11 +2082,12 @@ img { max-width: 100%; }
         closeSheet(); render(); toast('Día borrado');
         break;
       case 'use-plan': usePlan(); sheetAuto(true); break;
+      case 'open-sports': openSports(); break;
       case 'chip':
         var sp = el.getAttribute('data-sport');
         if (state.sheet && state.sheet.type === 'day') {
           var cb = q('#chk-' + sp);
-          if (!cb.checked) { cb.checked = true; toggleRow(sp, true); }
+          if (cb && !cb.checked) { cb.checked = true; toggleRow(sp, true); }
           q('#val-' + sp).value = dec(el.getAttribute('data-v'));
         } else q('#pkm').value = dec(el.getAttribute('data-v'));
         sheetAuto(true);
@@ -2054,6 +2113,10 @@ img { max-width: 100%; }
   document.addEventListener('change', function (e) {
     var t = e.target;
     if (!state.sheet) return;
+    if (state.sheet.type === 'sports' && t.matches('input[type=checkbox][data-sp]')) {
+      if (!setSport(t.getAttribute('data-sp'), t.checked)) { t.checked = true; toast('Tiene que quedar al menos un deporte.'); }
+      return;
+    }
     if (state.sheet.type === 'day' && t.matches('input[type=checkbox][data-sport]')) {
       toggleRow(t.getAttribute('data-sport'), t.checked);
     }
@@ -2172,7 +2235,7 @@ img { max-width: 100%; }
       }
       state.strava = 'on';
       var acts = r.activities || [];
-      var m = stravaMerge(acts);
+      var m = stravaMerge(acts.filter(function (a) { return sportOn(a.sport); }));
       await Promise.all(m.ps);
       var lost = m.keys.some(function (k) { return failed[k]; });
       if (acts.length && !lost) {
@@ -2207,12 +2270,11 @@ img { max-width: 100%; }
   });
 
   /* ---------- Deslizar para cambiar de pestaña (se ve la pantalla de al lado) ---------- */
-  var TAB_ORDER = ['log', 'plan', 'routines', 'year'];
   var drag = null;
   var reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   function getPanel() { return document.getElementById('panel'); }
   function resetPanel(p) { if (p) { p.style.transition = ''; p.style.transform = ''; p.style.willChange = ''; } }
-  function neighbor(dx) { var i = TAB_ORDER.indexOf(state.tab), j = i + (dx < 0 ? 1 : -1); return (i < 0 || j < 0 || j >= TAB_ORDER.length) ? null : TAB_ORDER[j]; }
+  function neighbor(dx) { var o = tabOrder(), i = o.indexOf(state.tab), j = i + (dx < 0 ? 1 : -1); return (i < 0 || j < 0 || j >= o.length) ? null : o[j]; }
   function tabHtml(t) { return t === 'log' ? renderLog() : t === 'plan' ? renderPlan() : t === 'year' ? renderYear() : renderRoutines(); }
 
   function makeGhost(tabId) {
