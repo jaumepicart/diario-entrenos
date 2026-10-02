@@ -458,7 +458,8 @@ html, body { overflow-x: clip; }
 .mprev { font-size: 13.5px; color: var(--ink-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .sportsrow { display: flex; justify-content: center; margin-top: 14px; }
 #app { position: relative; }
-#panel { touch-action: pan-y; }
+body, #panel { touch-action: pan-y; }
+#panel { min-height: calc(100vh - 180px); min-height: calc(100dvh - 180px); }
 .weekcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 10px; }
 .weekcard .wkhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .weekcard .wkhead h3 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .01em; }
@@ -1608,6 +1609,7 @@ img { max-width: 100%; }
   }
 
   function render() {
+    if (typeof drag !== 'undefined' && drag && drag.axis === 'x') { drag.rerender = true; return; }
     var app = document.getElementById('app');
     if (state.locked) { app.innerHTML = lockHtml(); return; }
     if (state.mode === 'auth' || state.mode === 'recovery') { app.innerHTML = authHtml(); return; }
@@ -2403,7 +2405,7 @@ img { max-width: 100%; }
     if (e.touches.length !== 1 || state.mode === 'auth' || state.mode === 'recovery' || state.locked || !sheetEl.hidden) return;
     var t = e.touches[0], w = window.innerWidth, tg = e.target;
     if (t.clientX < 28 || t.clientX > w - 28) return; /* bordes: reservados al gesto "atrás" del iPhone */
-    if (!getPanel() || !(tg.closest && tg.closest('#panel')) || tg.closest('input, textarea, select')) return;
+    if (!getPanel() || !tg.closest || tg.closest('header, .sheet, input, textarea, select, .toast')) return;
     drag = { x: t.clientX, y: t.clientY, t: Date.now(), axis: null, dx: 0, w: window.innerWidth, ghost: null, ghostTab: null };
   }, { passive: true });
 
@@ -2437,7 +2439,7 @@ img { max-width: 100%; }
     var go = !cancel && nxt && d.ghost && (Math.abs(dx) > w * 0.33 || fast);
     if (!p) { dropGhost(); drag = null; return; }
     d.busy = true;
-    var ms = reduceMotion ? 0 : 240, ease = ms ? 'transform ' + ms + 'ms cubic-bezier(.25,.8,.3,1)' : 'none';
+    var ms = reduceMotion ? 0 : 200, ease = ms ? 'transform ' + ms + 'ms cubic-bezier(.25,.8,.3,1)' : 'none';
     var sign = dx < 0 ? -1 : 1;
     p.style.transition = ease;
     if (d.ghost) d.ghost.style.transition = ease;
@@ -2448,11 +2450,27 @@ img { max-width: 100%; }
       p.style.transform = 'translate3d(0,0,0)';
       if (d.ghost) d.ghost.style.transform = 'translate3d(' + (-sign * w) + 'px,0,0)';
     }
+    if (go) {
+      var tbs = document.querySelectorAll('.tab');
+      for (var ti = 0; ti < tbs.length; ti++) tbs[ti].setAttribute('aria-selected', String(tbs[ti].getAttribute('data-tab') === nxt));
+    }
     setTimeout(function () {
-      if (go) { state.tab = nxt; render(); window.scrollTo(0, 0); }
-      else resetPanel(getPanel());
+      var g = d.ghost, old = getPanel();
+      if (go) {
+        state.tab = nxt;
+        if (g && old && g.parentNode && window.scrollY < 2) {
+          /* la pantalla que ya está dibujada pasa a ser la buena: sin repintar, sin parpadeo */
+          g.removeAttribute('style'); g.removeAttribute('aria-hidden'); g.className = '';
+          g.id = 'panel'; g.setAttribute('role', 'tabpanel'); g.setAttribute('aria-labelledby', 'tab-' + nxt);
+          old.parentNode.removeChild(old);
+          d.ghost = null;
+        } else { d.rerender = true; }
+        window.scrollTo(0, 0);
+      } else resetPanel(getPanel());
       dropGhost();
+      var again = d.rerender;
       drag = null;
+      if (again) render();
     }, ms + 20);
   }
   document.addEventListener('touchend', function () { endDrag(false); }, { passive: true });
